@@ -1,0 +1,31 @@
+前言
+expdp和impdp是oracle数据库之间移动数据的工具。expdp和impdp只能在数据库服务端使用，不能在客户端使用。本文简单总结了expdp和impdp常用的命令，详细信息参考oracle官方文档Utilities。
+
+directory相关SQL语句:
+   select * from dba_directories;
+    create directory my_dir as '/home/oracle/tmp';
+    grant read,write on directory my_dir to scott;
+    
+EXPDP导出
+注意：
+1、导数的数据库用户需要拥有对directory_object的读写权限。
+2、操作系统中需要已经存在directory_object指定的路径。
+3、oracle用户拥有对directory_object指定路径的读写权限。
+4、system用户导出用户，会将创建用户和授予系统权限的元数据也导出，普通用户不能导出这些元数据。
+
+expdp命令示例
+##导出一张表，例：
+expdp system/oracle directory=my_dir dumpfile=expdp.dmp   logfile=expdp.log tables=scott.emp
+ 
+##导出多张表，例：
+expdp system/oracle directory=my_dir dumpfile=expdp.dmp   logfile=expdp.log tables=\(scott.emp,scott.dept\)
+ 
+##导出一个用户(导出这个用户的所有对象)，例：
+expdp system/oracle directory=my_dir dumpfile=expdp.dmp   logfile=expdp.log schemas=scott
+ 
+##导出多个用户，例：
+expdp system/oracle directory=my_dir dumpfile=expdp.dmp   logfile=expdp.log schemas=\(scott,hr\)
+ 
+##导出整个数据库（sys、ordsys、mdsys的用户数据不会被导出）例：
+expdp system/oracle directory=my_dir dumpfile=expdp.dmp   logfile=expdp.log full=yes
+
