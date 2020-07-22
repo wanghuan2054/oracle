@@ -10,6 +10,16 @@ CONNECT BY ROWNUM <= LENGTH('601N,648N') -
    CREATE OR REPLACE TYPE STR_SPLIT IS TABLE OF VARCHAR2 (32676); 
    
    2. /*  创建 split 函数 */
+ /**************************************
+  * Function:    返回字符串被指定字符分割后的表类型。
+  * Parameters:  p_list: 待分割的字符串。
+                 p_sep: 分隔符，默认逗号，也可以指定字符或字符串。
+  * Example:     SELECT *
+                   FROM users
+                  WHERE u_id IN (SELECT COLUMN_VALUE
+                                   FROM table (split ('1,2')))
+                 返回u_id为1和2的两行数据。
+  **************************************/
    CREATE OR REPLACE FUNCTION SPLITSTR(P_STRING IN VARCHAR2, P_DELIMITER IN VARCHAR2)
     RETURN STR_SPLIT 
     PIPELINED
