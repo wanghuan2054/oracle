@@ -1,0 +1,82 @@
+第一种方式：
+SELECT REGEXP_SUBSTR('601N,648N', '[^,]+', 1, ROWNUM) AS VAL
+  FROM DUAL
+CONNECT BY ROWNUM <= LENGTH('601N,648N') -
+           LENGTH(REGEXP_REPLACE('601N,648N', ',', '')) + 1;
+           
+           
+第二种方式：
+  1. /* 创建一个表类型 */
+   CREATE OR REPLACE TYPE STR_SPLIT IS TABLE OF VARCHAR2 (32676); 
+   
+   2. /*  创建 split 函数 */
+   CREATE OR REPLACE FUNCTION SPLITSTR(P_STRING IN VARCHAR2, P_DELIMITER IN VARCHAR2)
+    RETURN STR_SPLIT 
+    PIPELINED
+AS
+    V_LENGTH   NUMBER := LENGTH(P_STRING);
+    V_START    NUMBER := 1;
+    V_INDEX    NUMBER;
+BEGIN
+    WHILE(V_START <= V_LENGTH)
+    LOOP
+        V_INDEX := INSTR(P_STRING, P_DELIMITER, V_START);
+
+        IF V_INDEX = 0
+        THEN
+            PIPE ROW(SUBSTR(P_STRING, V_START));
+            V_START := V_LENGTH + 1;
+        ELSE
+            PIPE ROW(SUBSTR(P_STRING, V_START, V_INDEX - V_START));
+            V_START := V_INDEX + 1;
+        END IF;
+    END LOOP;
+
+    RETURN;
+END SPLITSTR;
+3. 
+/* 创建 splitstr 函数 */
+ CREATE OR REPLACE FUNCTION splitstr (str IN CLOB,
+                                        i   IN NUMBER := 0,
+                                        sep IN VARCHAR2 := ','
+ )
+    RETURN VARCHAR2
+ /**************************************
+  * Name:        splitstr
+  * Function:    返回字符串被指定字符分割后的指定节点字符串。
+  * Parameters:  str: 待分割的字符串。
+                 i: 返回第几个节点。当i为0返回str中的所有字符，当i 超过可被分割的个数时返回空。
+                 sep: 分隔符，默认逗号，也可以指定字符或字符串。当指定的分隔符不存在于str中时返回sep中的字符。
+  * Example:     select splitstr('abc,def', 1) as str from dual;  得到 abc
+                 select splitstr('abc,def', 3) as str from dual;  得到 空
+  **************************************/
+ IS
+    t_i       NUMBER;
+    t_count   NUMBER;
+    t_str     VARCHAR2 (4000);
+ BEGIN
+    IF i = 0
+    THEN
+       t_str   := str;
+    ELSIF INSTR (str, sep) = 0
+    THEN
+       t_str   := sep;
+    ELSE
+       SELECT COUNT ( * )
+       INTO t_count
+       FROM table (split (str, sep));
+ 
+       IF i <= t_count
+       THEN
+          SELECT str
+          INTO t_str
+          FROM (SELECT ROWNUM AS item, COLUMN_VALUE AS str
+                FROM table (split (str, sep)))
+          WHERE item = i;
+       END IF;
+    END IF;
+ 
+    RETURN t_str;
+ END;
+ 
+ 4. select * from table(SPLITSTR('601N,648N',','));
