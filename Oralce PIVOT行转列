@@ -1,0 +1,34 @@
+WITH TEMP AS
+ (SELECT A.MACHINENAME, A.TRANSFERSTATE, COUNT(*) AS STATE_NUM
+    FROM PORT A
+   WHERE A.TRANSFERSTATE IN ('ReadyToUnload',
+                             'ReadyToLoad',
+                             'ReservedToUnload',
+                             'ReservedToLoad')
+     AND A.FACTORYNAME = 'LBP'
+   GROUP BY A.MACHINENAME, A.TRANSFERSTATE),
+
+A AS
+ (SELECT A.MACHINENAME, COUNT(A.PORTNAME) AS PORT_NUM
+    FROM PORT A
+   WHERE A.FACTORYNAME = 'LBP'
+   GROUP BY A.MACHINENAME),
+
+B AS
+ (SELECT *
+    FROM (SELECT MACHINENAME, TRANSFERSTATE, STATE_NUM FROM TEMP)
+  PIVOT(SUM(STATE_NUM)
+     FOR TRANSFERSTATE IN('ReadyToUnload' AS READYTOUNLOAD,
+                         'ReadyToLoad' AS READYTOLOAD,
+                         'ReservedToUnload' AS RESERVEDTOUNLOAD,
+                         'ReservedToLoad' AS RESERVEDTOLOAD)))
+
+SELECT T.MACHINENAME,
+       T.PORT_NUM,
+       T1.READYTOUNLOAD,
+       T1.READYTOLOAD,
+       T1.RESERVEDTOUNLOAD,
+       T1.RESERVEDTOLOAD
+  FROM A T
+ INNER JOIN B T1
+    ON (T.MACHINENAME = T1.MACHINENAME)
