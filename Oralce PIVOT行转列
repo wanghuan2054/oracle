@@ -1,3 +1,4 @@
+DEMO1 ： 
 WITH TEMP AS
  (SELECT A.MACHINENAME, A.TRANSFERSTATE, COUNT(*) AS STATE_NUM
     FROM PORT A
@@ -32,3 +33,107 @@ SELECT T.MACHINENAME,
   FROM A T
  INNER JOIN B T1
     ON (T.MACHINENAME = T1.MACHINENAME)
+
+
+DEMO2 ：
+WITH STD_INFO AS
+ (SELECT T1.OPERATIONSEQ,
+         T1.OPERATIONDESC,
+         T.MACHINENAME,
+         T.HOUR_SHIFT,
+         SUM(T.LOT_QTY) AS LOT_QTY
+    FROM DWD_MMTSPEC_N_MACHINE T1
+    LEFT JOIN DWD_MOVEMENT_1H_MACHINE T
+      ON (T.MACHINENAME = T1.MACHINENAME)
+   WHERE T.PRODUCTIONTYPE = 'Production'
+     AND T.PRODUCTFACTORYTYPE = 'LBP'
+     AND T.REPORTDATE = '20200821'
+   GROUP BY T1.OPERATIONSEQ, T1.OPERATIONDESC, T.MACHINENAME, T.HOUR_SHIFT
+   ORDER BY T1.OPERATIONSEQ, T.HOUR_SHIFT),
+
+SUM_INFO AS
+ (SELECT T1.OPERATIONSEQ,
+         T1.OPERATIONDESC,
+         SUBSTR(T.MACHINENAME, 1, 5) || '_SUM' AS MACHINENAME,
+         T.HOUR_SHIFT,
+         SUM(T.LOT_QTY) / MAX(T1.DENOMINATOR) AS AVG_NUM
+    FROM DWD_MMTSPEC_N_MACHINE T1
+    LEFT JOIN DWD_MOVEMENT_1H_MACHINE T
+      ON (T.MACHINENAME = T1.MACHINENAME)
+   WHERE T.PRODUCTIONTYPE = 'Production'
+     AND T.PRODUCTFACTORYTYPE = 'LBP'
+     AND T.REPORTDATE = '20200821'
+   GROUP BY T1.OPERATIONSEQ,
+            T1.OPERATIONDESC,
+            SUBSTR(T.MACHINENAME, 1, 5) || '_SUM',
+            T.HOUR_SHIFT
+   ORDER BY T1.OPERATIONSEQ, T.HOUR_SHIFT)
+
+SELECT *
+  FROM (SELECT *
+          FROM (SELECT OPERATIONSEQ,
+                       OPERATIONDESC,
+                       MACHINENAME,
+                       HOUR_SHIFT,
+                       LOT_QTY
+                  FROM STD_INFO)
+        PIVOT(SUM(LOT_QTY)
+           FOR HOUR_SHIFT IN('06' AS "06",
+                            '07' AS "07",
+                            '08' AS "08",
+                            '09' AS "09",
+                            '10' AS "10",
+                            '11' AS "11",
+                            '12' AS "12",
+                            '13' AS "13",
+                            '14' AS "14",
+                            '15' AS "15",
+                            '16' AS "16",
+                            '17' AS "17",
+                            '18' AS "18",
+                            '19' AS "19",
+                            '20' AS "20",
+                            '21' AS "21",
+                            '22' AS "22",
+                            '23' AS "23",
+                            '00' AS "00",
+                            '01' AS "01",
+                            '02' AS "02",
+                            '03' AS "03",
+                            '04' AS "04",
+                            '05' AS "05"))
+        UNION ALL
+        SELECT *
+          FROM (SELECT OPERATIONSEQ,
+                       OPERATIONDESC,
+                       MACHINENAME,
+                       HOUR_SHIFT,
+                       AVG_NUM
+                  FROM SUM_INFO)
+        PIVOT(SUM(AVG_NUM)
+           FOR HOUR_SHIFT IN('06' AS "06",
+                            '07' AS "07",
+                            '08' AS "08",
+                            '09' AS "09",
+                            '10' AS "10",
+                            '11' AS "11",
+                            '12' AS "12",
+                            '13' AS "13",
+                            '14' AS "14",
+                            '15' AS "15",
+                            '16' AS "16",
+                            '17' AS "17",
+                            '18' AS "18",
+                            '19' AS "19",
+                            '20' AS "20",
+                            '21' AS "21",
+                            '22' AS "22",
+                            '23' AS "23",
+                            '00' AS "00",
+                            '01' AS "01",
+                            '02' AS "02",
+                            '03' AS "03",
+                            '04' AS "04",
+                            '05' AS "05")))
+ ORDER BY OPERATIONSEQ, OPERATIONDESC, MACHINENAME;
+
