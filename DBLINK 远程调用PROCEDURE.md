@@ -6,7 +6,7 @@
 
 GRANT EXECUTE ON PROCEDURENAME(存储过程名称) TO USER（用户名）
 
-### 1. PROCEDURE传参数
+### 一. PROCEDURE传参数
 
 #### 1. 源库PROCEDURE操作(ETL库为例)
 
@@ -54,12 +54,22 @@ EXCEPTION
 END;
 ```
 
-### 2. PROCEDURE不传参数
+### 二. PROCEDURE不传参数
 
  ```plsql
  BEGIN
 
    EDBADM.PRC_EDS_LOT_TRUNC@EDB2ETL;
+
+  END;
+ ```
+
+### 三. PROCEDURE调用函数
+
+ ```plsql
+ BEGIN
+
+   EDBADM.GET_SHIFT_TIMEKEY@EDB2ETL(T1.EVENT_TIMEKEY)
 
   END;
  ```
