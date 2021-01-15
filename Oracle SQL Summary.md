@@ -49,12 +49,12 @@ sqlplus /nolog
 -- SYSDBA角色登录，输入SYS密码
 conn SYS as SYSDBA
 -- 普通用户登录
-conn edbadm/edbadm
+conn edbadm/XXXX
 
 -- SYSDBA角色登录
 sqlplus / as sysdba
 -- 切换到普通用户登录
-conn edbadm/edbadm
+conn edbadm/XXXXX
 
 ```
 
