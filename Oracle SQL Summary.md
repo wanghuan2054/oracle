@@ -121,11 +121,39 @@ dbshut --关闭数据库链接；
 
 
 
+### **配置参数查询**
+
+```sql
+-- 查询db block size
+SELECT * FROM V$PARAMETER T WHERE T."NAME" = 'db_block_size';
+```
+
+### **系统进程**
+
+```sql
+-- 查看系统进程
+SELECT SPID, PID, USERNAME, PROGRAM, PNAME, BACKGROUND
+  FROM V$PROCESS
+ WHERE BACKGROUND = '1';
+```
+
+
+
+### **表**
+
+#### 获取表定义
+
+```sql
+--获取所有表的表定义，需要挨个表进行执行收集，可采用脚本多行一次性方式批量执行。
+
+SELECT DBMS_METADATA.GET_DDL('TABLE', 'LOTHISTORY', 'EDBADM') FROM DUAL;
+```
+
 
 
 ### **表空间**
 
-#### 表空间名称查询**
+#### 表空间名称查询
 
 ```sql
 -- 按照表名查询表空间
@@ -188,6 +216,9 @@ SELECT A.TABLESPACE_NAME,
 
 ```sql
 SELECT T.* FROM DBA_DATA_FILES T WHERE T.TABLESPACE_NAME = 'EDS_COM_TBS'
+
+--查询表空间下数据文件及是否自动扩容
+SELECT FILE_NAME ,AUTOEXTENSIBLE FROM DBA_DATA_FILES WHERE TABLESPACE_NAME='EDS_EQP_TBS';
 ```
 
 #### 根据表空间查询子表空间占用
@@ -205,6 +236,18 @@ SELECT A.SEGMENT_NAME,
  ORDER BY 3 DESC;
 ```
 
+#### 表空间扩容（增加数据文件）
+
+```SQL
+-- 对空间不足表空间进行扩容：
+-- 方法一：
+ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA/mdwdb/eds_edc_tbs114.dbf' SIZE 10G AUTOEXTEND ON NEXT 100M MAXSIZE UNLIMITED;
+-- 方法二 数据库自己管理文件方式
+ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA' SIZE 20G AUTOEXTEND ON; 
+```
+
+
+
 #### 查看分区表统计信息
 
 ```plsql
@@ -219,9 +262,65 @@ SELECT TABLE_NAME,
  WHERE TABLE_NAME = 'EDS_UNIT_HIST' 
  ORDER BY A.PARTITION_NAME DESC ;
  
+ 
+ -- 查看分区索引的统计信息更新时间
+ SELECT A.INDEX_OWNER,
+       A.INDEX_NAME,
+       A.TABLESPACE_NAME,
+       A.PARTITION_NAME,
+       A.LAST_ANALYZED
+  FROM DBA_IND_PARTITIONS A
+ WHERE A.INDEX_OWNER = 'EDBADM'
+   AND A.PARTITION_NAME = 'PD20210110'
+   AND A.TABLESPACE_NAME = 'EDS_MAT_TBS'
+ ORDER BY A.LAST_ANALYZED DESC;
+ 
  -- DBA_TAB_PARTITIONS
  SELECT * FROM DBA_TAB_PARTITIONS WHERE TABLE_NAME='LOTHISTORY';
+ 
+ 
+ -- 使用EXTENT 区下包含的block Nums
+ SELECT SEGMENT_NAME, EXTENT_ID, FILE_ID, BLOCK_ID, BLOCKS
+  FROM DBA_EXTENTS
+ WHERE OWNER = 'EDBADM'
+   AND SEGMENT_NAME = 'EDS_GLASS_HIST';
+   
+ -- 使用EXTENT 区查询表的大小
+SELECT SUM(BLOCKS) * 8 / 1024 / 1024 / 1024 AS "SIZE(T)"
+  FROM DBA_EXTENTS
+ WHERE OWNER = 'EDBADM'
+   AND SEGMENT_NAME = 'EDS_GLASS_HIST';
 ```
+
+#### 查看非分区表统计信息
+
+```SQL
+-- 使用DBA_TABLES 也可以查询某个表的统计信息
+SELECT T.TABLE_NAME, T.NUM_ROWS, T.BLOCKS, T.LAST_ANALYZED
+  FROM USER_TABLES T
+ WHERE TABLE_NAME IN ('LOT');
+ 
+-- 查看某个表上索引的统计信息
+SELECT TABLE_NAME,
+       INDEX_NAME,
+       T.BLEVEL,
+       T.NUM_ROWS,
+       T.LEAF_BLOCKS,
+       T.LAST_ANALYZED
+  FROM USER_INDEXES T
+ WHERE TABLE_NAME IN ('LOT');
+
+```
+
+#### 手动收集统计信息
+
+```sql
+-- SQL CMD中执行存储过程， 使用用户名和表名
+EXECUTE DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
+-- 手动执行完毕后，继续查询表的统计信息，查看LAST_ANALYZED
+```
+
+
 
 #### 分区删除
 
@@ -249,6 +348,13 @@ select * from LOTHISTORY partition(LOTHISTORY_201912)
 -- 指定indexname ， tablename ， 和函数
 -- create index,如果是大表建立索引，切记加上online参数,在线构建索引，不会阻塞DML操作
 create index   indexname on table(substr(fileld,0,2)) online nologging   ;
+
+create index EDS_EDC_BSPRODUCT_DATA_IDX_03 on EDBADM.EDS_EDC_BSPRODUCT_DATA (SUBSTR(EDC_COL_TIMEKEY,1,8), OPER_CODE)
+  nologging  local;
+
+create index EDS_SPC_CONTROL_SPEC_ITEM_01 on EDBADM.EDS_SPC_CONTROL_SPEC_ITEM (
+substr(t.spc_spec_name,1,INSTR(t.spc_spec_name, '-', 1, 1) - 1),substr(t.spc_spec_name,INSTR(t.spc_spec_name, '-', 1, 1) + 1,INSTR(t.spc_spec_name, '_', 1, 1) - INSTR(t.spc_spec_name, '-', 1, 1) - 1)
+) nologging  local;
 ```
 
 #### **创建Normal索引**
@@ -372,11 +478,18 @@ SELECT T.TABLE_NAME, T.INDEX_NAME, T.ALIGNMENT, T.LOCALITY
 ##### 查看索引是否有效
 
 ```sql
--- 普通索引是否失效
+-- 普通索引是否失效 ， 也可以使用DBA_INDEXES
 -- STATUS 可以是Indicates whether a nonpartitioned index is VALID or UNUSABLE
 SELECT A.INDEX_NAME, A.INDEX_TYPE, A.TABLE_NAME, A.STATUS, A.PARTITIONED
   FROM USER_INDEXES A
  WHERE TABLE_NAME = 'LOTHISTORY';
+ 
+-- 使用DBA_OBJECTS查询索引是否失效
+SELECT OWNER, OBJECT_NAME, STATUS
+  FROM DBA_OBJECTS
+ WHERE OBJECT_TYPE = 'INDEX'
+   AND STATUS = 'VALID' -- INVALID
+   AND owner = 'EDBADM'
  
  -- 分区索引是否失效
 SELECT *
@@ -390,6 +503,21 @@ SELECT *
    AND L.STATUS != 'USABLE';
 ```
 
+#### **开启索引监控**
+
+```sql
+-- 开启某张表的索引监控
+ALTER INDEX BSBULLETINBOARD_PK MONITORING USAGE;  
+
+/*查看索引监控使用情况*/
+SELECT *
+  FROM V$OBJECT_USAGE T
+ WHERE T.TABLE_NAME = 'EDS_SUM_MOVE'
+   AND T.INDEX_NAME = 'EDS_SUM_MOVE_IDX_01' ;
+```
+
+
+
 #### hint 强制索引
 
 ```sql
@@ -399,12 +527,6 @@ AND t.eventname = 'TrackIn'
 AND t.timekey >= '20210113163000'
 AND t.timekey <= '20210113163500';
 ```
-
-
-
-
-
-
 
 ### **Top SQL查询**
 
@@ -426,8 +548,6 @@ where address in
           from v$session
          where paddr in (select addr from v$process where spid =15003));
 ```
-
-
 
 ### **表和数据恢复**
 
@@ -463,6 +583,16 @@ asmcmd
 help
 -- 查看ASM磁盘挂载情况
 lsdg
+
+
+--也可以通过表查询V$ASM_DISKGROUP ，  grid用户下，asmcmd ， lsdg命令查询结果一致 
+SELECT STATE,
+       NAME,
+       TOTAL_MB,
+       FREE_MB,
+       COMPATIBILITY,
+       DATABASE_COMPATIBILITY
+  FROM V$ASM_DISKGROUP ;
 ```
 
 
@@ -485,6 +615,19 @@ SELECT TRUNC(COMPLETION_TIME), SUM(MB) / 1024 DAY_GB
                TRUNC(SYSDATE) )
  GROUP BY TRUNC(COMPLETION_TIME)
  ORDER BY 1 DESC;
+```
+
+#### **查看ARCHIVED LOG Free Space**
+
+```SQL
+-- grid用户下，asmcmd ， lsdg命令查询结果一致 
+SELECT STATE,
+       NAME,
+       TOTAL_MB,
+       FREE_MB,
+       COMPATIBILITY,
+       DATABASE_COMPATIBILITY
+  FROM V$ASM_DISKGROUP ;
 ```
 
 
@@ -536,7 +679,52 @@ Notes:如果DBLINK访问的表属于DBLINK用户，则不需要创建同义词�
 如果DBLINK访问的表属于DBLINK EDBETL用户 ， 访问的表属于EBDADM，需要建同义词才能使用MATERIALPACKING@MWMS方式访问。
 ```
 
+#### 大表创建索引
 
+```sql
+-- 查询某张表下的所有索引
+SELECT A.INDEX_NAME, A.INDEX_TYPE, A.TABLE_NAME, A.STATUS, A.PARTITIONED
+  FROM USER_INDEXES A
+ WHERE TABLE_NAME = 'PRODUCTHISTORY';
+ 
+-- 查看索引占用空间大小
+SELECT SEGMENT_NAME, SUM(BYTES / 1024 / 1024 / 1024) AS "SIZE(G)"
+  FROM DBA_SEGMENTS
+ WHERE OWNER = 'EDBADM'
+   AND SEGMENT_NAME = 'IDX_PRODUCTHISTORY_01'
+ GROUP BY SEGMENT_NAME;
+
+-- 查询某张表下的所有索引
+SELECT A.INDEX_NAME, A.INDEX_TYPE, A.TABLE_NAME, A.STATUS, A.PARTITIONED
+  FROM USER_INDEXES A
+ WHERE TABLE_NAME = 'PRODUCTHISTORY';
+ 
+-- 查看索引占用空间大小
+SELECT SEGMENT_NAME, SUM(BYTES / 1024 / 1024 / 1024) AS "SIZE(G)"
+  FROM DBA_SEGMENTS
+ WHERE OWNER = 'EDBADM'
+   AND SEGMENT_NAME = 'IDX_PRODUCTHISTORY_01'
+ GROUP BY SEGMENT_NAME;
+
+--查看索引并行度 , 1是正常
+SELECT DEGREE FROM DBA_INDEXES WHERE INDEX_NAME='IDX_PRODUCTHISTORY_01';
+
+-- 修改索引并行度
+ALTER INDEX  EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05 PARALLEL 1;
+
+-- 在线创建本地索引 ， 开启并行
+CREATE INDEX EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05 ON EDBADM.EDS_EDC_BSPRODUCT_DATA (LOT_ID) NOLOGGING LOCAL PARALLEL 4 ONLINE;
+
+--建完索引需要关闭索引并行度
+ALTER INDEX  EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05 NOPARALLEL;
+
+--删除索引
+DROP INDEX EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05;
+
+--重建索引
+ALTER INDEX P1MESADM.BSLOTPROCESSDATAITEM_PK REBUILD PARALLEL 2;
+
+```
 
 ## **问题报错现象**
 
