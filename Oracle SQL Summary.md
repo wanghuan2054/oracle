@@ -149,8 +149,6 @@ SELECT SPID, PID, USERNAME, PROGRAM, PNAME, BACKGROUND
 SELECT DBMS_METADATA.GET_DDL('TABLE', 'LOTHISTORY', 'EDBADM') FROM DUAL;
 ```
 
-
-
 ### **表空间**
 
 #### 表空间名称查询
@@ -231,7 +229,8 @@ SELECT A.SEGMENT_NAME,
   FROM DBA_SEGMENTS A
  WHERE A.OWNER = 'EDBADM'
    AND A.TABLESPACE_NAME = 'EDS_EQP_TBS'
-   --AND A.SEGMENT_TYPE LIKE '%TABLE%'
+   AND a.segment_name = 'EDS_BSALARM_HIST'
+   AND A.SEGMENT_TYPE LIKE '%TABLE%'
  GROUP BY A.SEGMENT_NAME, A.SEGMENT_TYPE
  ORDER BY 3 DESC;
 ```
@@ -320,8 +319,6 @@ EXECUTE DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
 -- 手动执行完毕后，继续查询表的统计信息，查看LAST_ANALYZED
 ```
 
-
-
 #### 分区删除
 
 ```sql
@@ -333,12 +330,15 @@ alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200504;
 
 /*删除月分区*/
 alter table ALARMINTERFACETOPMS drop partition PM1902;
+```
+
+#### 查看指定分区数据 
+
+```sql
 
 /*查看分区表数据*/
 select * from LOTHISTORY partition(LOTHISTORY_201912)
 ```
-
-
 
 ### **索引**
 
@@ -495,12 +495,12 @@ SELECT OWNER, OBJECT_NAME, STATUS
 SELECT *
   FROM DBA_IND_PARTITIONS  L
  WHERE L.INDEX_OWNER IN ('EDBADM')
-   AND L.STATUS != 'USABLE';
+   AND L.STATUS = 'USABLE';
    
   SELECT L.STATUS , L.*
   FROM DBA_IND_PARTITIONS  L
  WHERE L.Index_Name = 'IDX_LOTHISTORY_01'
-   AND L.STATUS != 'USABLE';
+   AND L.STATUS = 'USABLE';
 ```
 
 #### **开启索引监控**
@@ -617,7 +617,34 @@ SELECT TRUNC(COMPLETION_TIME), SUM(MB) / 1024 DAY_GB
  ORDER BY 1 DESC;
 ```
 
-#### **查看ARCHIVED LOG Free Space**
+#### 查看ARCHIVED LOG 模式
+
+```mysql
+SQL> archive log list
+Database log mode              Archive Mode
+Automatic archival             Enabled
+Archive destination            +MDWDBARCH
+Oldest online log sequence     210813
+Next log sequence to archive   210816
+Current log sequence           210816
+```
+
+#### RMAN
+
+```sql
+-- rman 登录
+$ rman target /
+
+-- rman 删除归档 （“1”对应是一天，若想删除6小时前的归档日志，则改为0.25）
+RMAN> delete archivelog all completed before 'sysdate-1'; 
+
+-- 删除完归档，若有对应的备份策略需要重新启动全备。
+
+```
+
+
+
+#### 查看ARCHIVED LOG Free Space
 
 ```SQL
 -- grid用户下，asmcmd ， lsdg命令查询结果一致 
@@ -630,9 +657,192 @@ SELECT STATE,
   FROM V$ASM_DISKGROUP ;
 ```
 
+### **日志清理**
+
+#### Alert日志清理
+
+```shell
+-- Alert log剪切走后会自动重新生成log.xml
+$ cd /oracle/app/diag/rdbms/mdwdb/mdwdb1/alert/
+$ ll
+total 342942
+-rw-r-----   1 oracle     asmadmin   7658268 Jan 25 15:04 log.xml
+-rw-r-----   1 oracle     asmadmin   10485868 Dec 15 06:48 log_100.xml
+-rw-r-----   1 oracle     asmadmin   10485845 Jan  7 05:48 log_101.xml
+-rw-r-----   1 oracle     asmadmin   10485892 Sep 30 19:48 log_96.xml
+-rw-r-----   1 oracle     asmadmin   10485930 Oct 26 03:48 log_97.xml
+-rw-r-----   1 oracle     asmadmin   10485879 Nov 10 21:48 log_98.xml
+-rw-r-----   1 oracle     asmadmin   10485786 Dec  2 02:21 log_99.xml
+$ mv log.xml log_102.xml
+
+-- grid 用户下 listerner的alert日志
+$ cd /grid/app/diag/tnslsnr/mdwdb1/listener/alert 
+$ ll
+total 308484
+-rw-r-----   1 grid       oinstall    510164 Jan 25 15:31 log.xml
+-rw-r-----   1 grid       oinstall   10485787 Dec 23 15:13 log_1.xml
+-rw-r-----   1 grid       oinstall   10485859 Jan 12 18:17 log_10.xml
+-rw-r-----   1 grid       oinstall   10486109 Jan 16 07:04 log_11.xml
+-rw-r-----   1 grid       oinstall   10485912 Jan 19 06:13 log_12.xml
+-rw-r-----   1 grid       oinstall   10485997 Jan 21 11:57 log_13.xml
+-rw-r-----   1 grid       oinstall   10485984 Jan 23 17:01 log_14.xml
+-rw-r-----   1 grid       oinstall   10486125 Jan 25 13:13 log_15.xml
+$ mv log.xml log_16.xml
+```
+
+#### Trace日志清理
+
+```shell
+-- 切换到oracle 用户下trace 目录
+$ cd /oracle/app/diag/rdbms/mdwdb/mdwdb1/trace
+$ ll *log*
+-rw-r-----   1 oracle     asmadmin   6808460 Jun 15  2020 alert_mdwdb1.log.20200615
+-rw-r-----   1 oracle     asmadmin   8392065 Aug 14 18:04 alert_mdwdb1.log.20200814
+-rw-r-----   1 oracle     asmadmin   4173671 Sep 21 10:58 alert_mdwdb1.log.20200921
+-rw-r-----   1 oracle     asmadmin   2333414 Oct  9 18:16 alert_mdwdb1.log.20201009
+-rw-r-----   1 oracle     asmadmin   3075995 Nov  2 11:19 alert_mdwdb1.log.20201102
+-rw-r-----   1 oracle     asmadmin   5679071 Dec 16 10:15 alert_mdwdb1.log.20201216
+-rw-r-----   1 oracle     asmadmin   2326589 Jan  8 10:58 alert_mdwdb1.log.20210108
+-rw-r-----   1 oracle     asmadmin    212434 Jan 12 16:16 alert_mdwdb1.log.20210112
+-rw-r-----   1 oracle     asmadmin   1490263 Jan 25 15:21 alert_mdwdb1.log.20210124
+-rw-r--r--   1 oracle     asmadmin      6468 May 21  2014 sbtio.log
+
+-- grid用户下 ， listerner trace日志清理
+$ cd /grid/app/diag/tnslsnr/mdwdb1/listener/trace/
+
+-- 不能使用mv不会自动生成listener.log ，  将log内容打入黑洞
+$ cat /dev/null >listener.log
+```
+
+#### DailyCheck日志清理
+
+```shell
+-- 切换到oracle 用户下 , 执行数据库巡检脚本
+-- log存放位置：/home/oracle/daycheck/log
+$ cd /home/oracle/daycheck/log
+$ ls -lrt
+
+-- 查看指定目录下，指定后缀名的文件数量一共有多少 ( 查看一个月之前的log文件数量)
+$ find /home/oracle/daycheck/log -name '*.log' -mtime +30 | wc -l
+
+-- 删除一个月前的log
+$ find /home/oracle/daycheck/log -name '*.log'  -mtime +30  | xargs rm -rf  
+
+-- 另外一种写法
+/usr/bin/find $LOGDIR -name '*_*_*.log.gz' -mtime +5 -exec rm -f {} \;
+```
+
 
 
 ### **场景运维SQL**
+
+#### AWR收集
+
+```sql
+-- windows server 收集方式
+D:\app\Oracle\product\11.2.0.4\dbhome_1\RDBMS\ADMIN\awrrpt.sql
+C:\Users\Administrator.YSGDCIM>sqlplus / as sysdba
+SQL> @?/rdbms/admin/awrrpt.sql
+html默认下载路径为当前登录用户home目录下C:\Users\Administrator.YSGDCIM>
+
+-- Unix Server 收集方式
+$ echo $ORACLE_SID
+mdwdb2
+$ sqlplus / as sysdba
+
+SQL*Plus: Release 11.2.0.4.0 Production on Thu Jan 21 10:36:30 2021
+
+Copyright (c) 1982, 2013, Oracle.  All rights reserved.
+
+
+Connected to:
+Oracle Database 11g Enterprise Edition Release 11.2.0.4.0 - 64bit Production
+With the Partitioning, Real Application Clusters, Automatic Storage Management, OLAP,
+Data Mining and Real Application Testing options
+
+SQL> @?/rdbms/admin/awrrpt.sql
+
+Current Instance
+~~~~~~~~~~~~~~~~
+
+   DB Id    DB Name      Inst Num Instance
+----------- ------------ -------- ------------
+ 4080708746 MDWDB               2 mdwdb2
+
+
+Specify the Report Type
+~~~~~~~~~~~~~~~~~~~~~~~
+Would you like an HTML report, or a plain text report?
+Enter 'html' for an HTML report, or 'text' for plain text
+Defaults to 'html'
+Enter value for report_type: html
+
+Type Specified:  html
+
+
+Instances in this Workload Repository schema
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   DB Id     Inst Num DB Name      Instance     Host
+------------ -------- ------------ ------------ ------------
+* 4080708746        2 MDWDB        mdwdb2       mdwdb2
+  4080708746        4 MDWDB        mdwdb4       mdwdb4
+  4080708746        1 MDWDB        mdwdb1       mdwdb1
+  4080708746        3 MDWDB        mdwdb3       mdwdb3
+
+Using 4080708746 for database Id
+Using          2 for instance number
+
+
+Specify the number of days of snapshots to choose from
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Entering the number of days (n) will result in the most recent
+(n) days of snapshots being listed.  Pressing <return> without
+specifying a number lists all completed snapshots.
+
+
+Enter value for num_days: 1
+
+Listing the last day's Completed Snapshots
+
+                                                        Snap
+Instance     DB Name        Snap Id    Snap Started    Level
+------------ ------------ --------- ------------------ -----
+mdwdb2       MDWDB            65318 21 Jan 2021 00:00      1
+                              65319 21 Jan 2021 01:00      1
+                              65320 21 Jan 2021 02:00      1
+                              65321 21 Jan 2021 03:00      1
+                              65322 21 Jan 2021 04:00      1
+                              65323 21 Jan 2021 05:00      1
+                              65324 21 Jan 2021 06:00      1
+                              65325 21 Jan 2021 07:00      1
+                              65326 21 Jan 2021 08:00      1
+                              65327 21 Jan 2021 09:00      1
+                              65328 21 Jan 2021 10:00      1
+
+
+
+Specify the Begin and End Snapshot Ids
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Enter value for begin_snap: 65327
+Begin Snapshot Id specified: 65327
+
+Enter value for end_snap: 65328
+End   Snapshot Id specified: 65328
+
+
+
+Specify the Report Name
+~~~~~~~~~~~~~~~~~~~~~~~
+The default report file name is awrrpt_2_65327_65328.html.  To use this name,
+press <return> to continue, otherwise enter an alternative.
+
+Enter value for report_name: /tmp/awrrpt_2_65327_65328.html
+
+html默认下载路径为/tmp/awrrpt_2_65327_65328.html (awr报告存放路径可以指定)
+```
+
+
 
 #### DBLink&同义词创建
 
@@ -663,14 +873,20 @@ create database link MWMS
   using '(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=XX.XX.XX.XX)(PORT=1521))
                                     (ADDRESS=(PROTOCOL=TCP)(HOST=XX.XX.XX.XX)(PORT=1521)))
 									(CONNECT_DATA=(SERVER=default)(SERVICE_NAME=fgmsdb)))';
-
 --创建dblink同义词
 create SYNONYM MATERIALPACKINGMWMS for T1WMSADM.MATERIALPACKING@T1WMSADM;
 
+-- 创建同义词语法
+CREATE [ PUBLIC ] SYNONYM synonym_name FOR [ schema .] object[@db_link];
 create or replace synonym 同义词名 for 表名;  
 create or replace synonym 同义词名 for 用户.表名;  
 create or replace synonym 同义词名 for 表名@数据库链接名;  
+
+-- 删除私有同义词
 drop synonym 同义词名;  
+
+-- 删除公共同义词
+DROP PUBLIC SYNONYM public_emp;
 
 SELECT * FROM MATERIALPACKING@MWMS  --DBlink方式查询
 SELECT * FROM MATERIALPACKINGMWMS  --同义词方式查询
@@ -721,7 +937,8 @@ ALTER INDEX  EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05 NOPARALLEL;
 --删除索引
 DROP INDEX EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05;
 
---重建索引
+--在线重建索引
+ALTER INDEX EDBADM.EDS_BSALARM_HIST_PK REBUILD PARALLEL 12 NOLOGGING ONLINE ;
 ALTER INDEX P1MESADM.BSLOTPROCESSDATAITEM_PK REBUILD PARALLEL 2;
 
 ```
