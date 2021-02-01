@@ -137,7 +137,63 @@ SELECT SPID, PID, USERNAME, PROGRAM, PNAME, BACKGROUND
  WHERE BACKGROUND = '1';
 ```
 
+### SQLPLUS set详解
 
+```sql
+-- 输出每页行数，缺省为24,为了避免分页，可设定为0。
+SQL> set pagesize 0;    
+或者
+SQL> set pages 0;  
+-- 查看当前pagesize
+SQL> show pages;
+pagesize 25
+
+-- 输出一行字符个数，缺省为80
+SQL> set linesize 80;     
+或者
+SQL> set lines 0;  
+-- 查看当前linesize
+SQL>  show lines;
+linesize 500
+-- linesize的大小必须小于命令行可显示的大小，超过命令行的限制了，linesize当然不起作用
+
+SQL> set timing on;          //设置显示“已用时间：XXXX”
+
+SQL> set autotrace on-;    //设置允许对执行的sql进行分析
+
+SQL> set trimout on; //去除标准输出每行的拖尾空格，缺省为off
+
+SQL> set trimspool on; //去除重定向（spool）输出每行的拖尾空格，缺省为off
+
+SQL> set echo on               //设置运行命令是是否显示语句
+
+SQL> set echo off; //显示start启动的脚本中的每个sql命令，缺省为on
+
+SQL> set feedback on;       //设置显示“已选择XX行”
+
+SQL> set feedback off;      //回显本次sql命令处理的记录条数，缺省为on
+
+SQL> set colsep' '; //输出分隔符
+
+SQL> set heading off;    //输出域标题，缺省为on
+
+SQL> set numwidth 12;     //输出number类型域长度，缺省为10
+
+SQL> set termout off;    //显示脚本中的命令的执行结果，缺省为on
+
+SQL> set serveroutput on;  //设置允许显示输出类似dbms_output
+
+SQL> set verify off                     //可以关闭和打开提示确认信息old 1和new 1的显示. 
+
+/*
+  查看对应的参数，可使用 show param_name ;
+*/
+
+-- 设置列宽 ， col 和 column方式都可以
+-- col machine format a12  或 column WINDOW_NAME format a25;
+-- col username format a12 或 column username format a25;
+
+```
 
 ### **表**
 
@@ -245,6 +301,12 @@ ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA/mdwdb/eds_edc_tbs114.dbf' 
 ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA' SIZE 20G AUTOEXTEND ON; 
 ```
 
+#### 查看某张表是否是分区表
+
+```sql
+-- 查看分区表统计信息
+```
+
 
 
 #### 查看分区表统计信息
@@ -257,10 +319,21 @@ SELECT TABLE_NAME,
        A.BLOCKS * 8 / 1024 / 1024 GB,
        A.NUM_ROWS,
        A.LAST_ANALYZED
+  FROM DBA_TAB_PARTITIONS A
+ WHERE TABLE_NAME = 'PRODUCTHISTORY' 
+ ORDER BY A.PARTITION_NAME DESC ;
+
+-- 使用某一特定用户登录时候，使用USER开头视图
+SELECT TABLE_NAME,
+       PARTITION_NAME,
+       TABLESPACE_NAME,
+       A.BLOCKS * 8 / 1024 / 1024 GB,
+       A.NUM_ROWS,
+       A.LAST_ANALYZED
   FROM USER_TAB_PARTITIONS A
  WHERE TABLE_NAME = 'EDS_UNIT_HIST' 
  ORDER BY A.PARTITION_NAME DESC ;
- 
+
  
  -- 查看分区索引的统计信息更新时间
  SELECT A.INDEX_OWNER,
@@ -272,6 +345,18 @@ SELECT TABLE_NAME,
  WHERE A.INDEX_OWNER = 'EDBADM'
    AND A.PARTITION_NAME = 'PD20210110'
    AND A.TABLESPACE_NAME = 'EDS_MAT_TBS'
+ ORDER BY A.LAST_ANALYZED DESC;
+ 
+-- 查看具体索引的统计信息更新时间
+SELECT A.INDEX_OWNER,
+       A.INDEX_NAME,
+       A.TABLESPACE_NAME,
+       A.PARTITION_NAME,
+       A.LAST_ANALYZED
+  FROM DBA_IND_PARTITIONS A
+ WHERE A.INDEX_OWNER = 'P1MESADM'
+   AND A.INDEX_NAME = 'IDX_PRODUCTHISTORY_01'
+   AND A.partition_name = 'PW210104'
  ORDER BY A.LAST_ANALYZED DESC;
  
  -- DBA_TAB_PARTITIONS
@@ -310,6 +395,110 @@ SELECT TABLE_NAME,
  WHERE TABLE_NAME IN ('LOT');
 
 ```
+
+#### 查看自动收集统计信息功能
+
+```sql
+-- 在Oracle的11g版本中提供了统计数据自动收集的功能 , 默认是启用这个功能
+-- 查看自动收集统计信息的任务及状态
+SQL> select client_name,status from dba_autotask_client;
+
+CLIENT_NAME                                                      STATUS
+---------------------------------------------------------------- --------
+auto optimizer stats collection                                  ENABLED
+auto space advisor                                               ENABLED
+sql tuning advisor                                               ENABLED
+-- "auto optimizer stats collection"是自动收集统计信息的任务名称，状态目前是启用状态。
+
+-- 禁止自动收集统计信息的任务
+SQL> exec DBMS_AUTO_TASK_ADMIN.DISABLE(client_name => 'auto optimizer stats collection',operation => NULL,window_name => NULL);
+SQL>  select client_name,status from dba_autotask_client;
+
+CLIENT_NAME                                                      STATUS
+---------------------------------------------------------------- --------
+auto optimizer stats collection                                  DISABLED
+auto space advisor                                               ENABLED
+sql tuning advisor                                               ENABLED
+
+
+-- 启用自动收集统计信息的任务
+SQL> exec DBMS_AUTO_TASK_ADMIN.ENABLE(client_name => 'auto optimizer stats collection',operation => NULL,window_name => NULL);
+SQL> select client_name,status from dba_autotask_client;
+
+CLIENT_NAME                                                      STATUS
+---------------------------------------------------------------- --------
+auto optimizer stats collection                                  ENABLED
+auto space advisor                                               ENABLED
+sql tuning advisor                                               ENABLED
+
+-- 获得当前自动收集统计信息的执行时间 
+/*
+   WINDOW_NAME：任务名
+   REPEAT_INTERVAL：任务重复间隔时间
+   DURATION：持续时间
+*/
+SELECT T1.WINDOW_NAME, T1.REPEAT_INTERVAL, T1.DURATION
+  FROM DBA_SCHEDULER_WINDOWS T1, DBA_SCHEDULER_WINGROUP_MEMBERS T2
+ WHERE T1.WINDOW_NAME = T2.WINDOW_NAME
+   AND T2.WINDOW_GROUP_NAME IN
+       ('MAINTENANCE_WINDOW_GROUP', 'BSLN_MAINTAIN_STATS_SCHED');
+
+-- 修改统计信息收集的时间频次
+1.停止任务：
+SQL> BEGIN
+  2    DBMS_SCHEDULER.DISABLE(
+  3    name => '"SYS"."FRIDAY_WINDOW"',
+  4    force => TRUE);
+  5  END;
+  6  /
+
+PL/SQL 过程已成功完成。
+2.修改任务的持续时间，单位是分钟：
+SQL> BEGIN
+  2    DBMS_SCHEDULER.SET_ATTRIBUTE(
+  3    name => '"SYS"."FRIDAY_WINDOW"',
+  4    attribute => 'DURATION',
+  5    value => numtodsinterval(180,'minute'));
+  6  END;  
+  7  /
+
+PL/SQL 过程已成功完成。
+3.开始执行时间，BYHOUR=2，表示2点开始执行：
+SQL> BEGIN
+  2    DBMS_SCHEDULER.SET_ATTRIBUTE(
+  3    name => '"SYS"."FRIDAY_WINDOW"',
+  4    attribute => 'REPEAT_INTERVAL',
+  5    value => 'FREQ=WEEKLY;BYDAY=MON;BYHOUR=2;BYMINUTE=0;BYSECOND=0');
+  6  END;
+  7  /
+
+PL/SQL 过程已成功完成。
+4.开启任务：
+SQL> BEGIN
+  2    DBMS_SCHEDULER.ENABLE(
+  3    name => '"SYS"."FRIDAY_WINDOW"');
+  4  END;
+  5  /
+
+PL/SQL 过程已成功完成。
+5.查看修改后的情况：
+SQL> select t1.window_name,t1.repeat_interval,t1.duration from dba_scheduler_windows t1,dba_scheduler_wingroup_members t2
+  2  where t1.window_name=t2.window_name and t2.window_group_name in ('MAINTENANCE_WINDOW_GROUP','BSLN_MAINTAIN_STATS_SCHED');
+ 
+WINDOW_NAME                    REPEAT_INTERVAL                                                                  DURATION
+------------------------------ -------------------------------------------------------------------------------- -------------------------------------------------------------------------------
+WEDNESDAY_WINDOW               freq=daily;byday=WED;byhour=22;byminute=0; bysecond=0                            +000 04:00:00
+FRIDAY_WINDOW                  FREQ=WEEKLY;BYDAY=MON;BYHOUR=2;BYMINUTE=0;BYSECOND=0                             +000 03:00:00
+SATURDAY_WINDOW                freq=daily;byday=SAT;byhour=6;byminute=0; bysecond=0                             +000 20:00:00
+THURSDAY_WINDOW                freq=daily;byday=THU;byhour=22;byminute=0; bysecond=0                            +000 04:00:00
+TUESDAY_WINDOW                 freq=daily;byday=TUE;byhour=22;byminute=0; bysecond=0                            +000 04:00:00
+SUNDAY_WINDOW                  freq=daily;byday=SUN;byhour=6;byminute=0; bysecond=0                             +000 20:00:00
+MONDAY_WINDOW                  freq=daily;byday=MON;byhour=22;byminute=0; bysecond=0                            +000 04:00:00
+ 
+7 rows selected
+```
+
+
 
 #### 手动收集统计信息
 
