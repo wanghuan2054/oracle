@@ -301,14 +301,6 @@ ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA/mdwdb/eds_edc_tbs114.dbf' 
 ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA' SIZE 20G AUTOEXTEND ON; 
 ```
 
-#### 查看某张表是否是分区表
-
-```sql
--- 查看分区表统计信息
-```
-
-
-
 #### 查看分区表统计信息
 
 ```plsql
@@ -420,7 +412,6 @@ auto optimizer stats collection                                  DISABLED
 auto space advisor                                               ENABLED
 sql tuning advisor                                               ENABLED
 
-
 -- 启用自动收集统计信息的任务
 SQL> exec DBMS_AUTO_TASK_ADMIN.ENABLE(client_name => 'auto optimizer stats collection',operation => NULL,window_name => NULL);
 SQL> select client_name,status from dba_autotask_client;
@@ -430,6 +421,12 @@ CLIENT_NAME                                                      STATUS
 auto optimizer stats collection                                  ENABLED
 auto space advisor                                               ENABLED
 sql tuning advisor                                               ENABLED
+
+--修改为表级增量统计，
+exec dbms_stats.set_table_prefs('EDBADM','ODS_PRODUCTHISTORY_LOC','INCREMENTAL','TRUE');
+
+--查看表级增量统计修改结果
+SELECT DBMS_STATS.GET_PREFS(PNAME => 'INCREMENTAL',OWNNAME => 'EDBADM',TABNAME=> 'EDS_LOT') AS IS_INCRESTATS FROM DUAL;
 
 -- 获得当前自动收集统计信息的执行时间 
 /*
@@ -498,6 +495,50 @@ MONDAY_WINDOW                  freq=daily;byday=MON;byhour=22;byminute=0; byseco
 7 rows selected
 ```
 
+#### 查看某张表的统计信息
+
+```sql
+-- 查询某表是否开启了增量统计功能
+SELECT DBMS_STATS.GET_PREFS(PNAME => 'INCREMENTAL',OWNNAME => 'EDBADM',TABNAME=> 'LOT') AS IS_INCRESTATS FROM DUAL;
+
+-- 方式1 ， 根据用户表查询表最后统计时间
+SELECT TABLE_NAME,NUM_ROWS,BLOCKS,LAST_ANALYZED FROM USER_TABLES WHERE TABLE_NAME='LOT';
+
+-- 方式2  根据ALL_TAB_STATISTICS统计信息查询表最后统计信息
+SELECT T.OWNER,
+       T.TABLE_NAME,
+       T.PARTITION_NAME,
+       T.SUBPARTITION_NAME,
+       T.OBJECT_TYPE,
+       T.NUM_ROWS,
+       T.SAMPLE_SIZE,
+       T.LAST_ANALYZED,
+       T.GLOBAL_STATS,
+       T.USER_STATS,
+       T.STALE_STATS
+  FROM ALL_TAB_STATISTICS T
+ WHERE T.OWNER = 'EDBADM'
+   AND T.TABLE_NAME = 'LOT'
+   AND T.LAST_ANALYZED IS NOT NULL
+ ORDER BY T.LAST_ANALYZED DESC;
+ 
+ 
+```
+
+#### 查看某张表上索引统计信息
+
+```mysql
+-- 查看某个表上索引的统计信息
+SELECT TABLE_NAME,
+       INDEX_NAME,
+       T.BLEVEL,
+       T.NUM_ROWS,
+       T.LEAF_BLOCKS,
+       T.LAST_ANALYZED
+  FROM USER_INDEXES T
+ WHERE TABLE_NAME IN ('EDS_ENERGY_EHS');
+```
+
 
 
 #### 手动收集统计信息
@@ -506,7 +547,22 @@ MONDAY_WINDOW                  freq=daily;byday=MON;byhour=22;byminute=0; byseco
 -- SQL CMD中执行存储过程， 使用用户名和表名
 EXECUTE DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
 -- 手动执行完毕后，继续查询表的统计信息，查看LAST_ANALYZED
+
+EXEC DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
+
+-- 收集分区表的某个分区统计信息
+exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'RANGE_PART_TAB',partname => 'p_201312',estimate_percent => 10,method_opt=> 'for all indexed columns',cascade=>TRUE);  
+-- 收集索引统计信息
+exec dbms_stats.gather_index_stats(ownname => 'USER',indname => 'IDX_OBJECT_ID',estimate_percent => '10',degree => '4');  
+-- 收集表和索引统计信息 
+exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'TEST',estimate_percent => 10,method_opt=> 'for all indexed columns',cascade=>TRUE);  
+-- 收集某个用户的统计信息
+exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
+-- 收集整个数据库的统计信息
+exec dbms_stats.gather_database_stats(estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
 ```
+
+
 
 #### 分区删除
 
@@ -924,6 +980,85 @@ $ find /home/oracle/daycheck/log -name '*.log'  -mtime +30  | xargs rm -rf
 
 
 ### **场景运维SQL**
+
+#### Session等待查询
+
+```sql
+- sqlplus 设置显示格式
+set echo off feedback off timing off pause off
+set pages 100 lines 232 trimspool on trimout on space 1 recsep off
+col machine format a12
+col username format a12
+col sid format a12
+col ospid format a9
+col program format a16
+col state  format a18
+col event format a30
+col sqlid format a15
+col block_ss format 9999999
+
+-- sqlplus 中执行或者plsql中执行
+-- 查看详细等待事件
+select a.machine                                                             machine,
+       a.username                                                            username,
+       a.sid||','||a.serial#                                                 sid,
+       c.spid                                                                ospid,
+       substr(a.program,1,19)                                                program,
+       a.event                                                               event,
+       b.sql_id||','||b.child_number                                         sqlid,
+--       b.plan_hash_value                                                     plan_hash_value,
+       b.executions                                                          execs,
+       (b.elapsed_time/decode(nvl(b.executions,0),0,1,b.executions))/1000000 avg_etime,
+       round((b.buffer_gets/decode(nvl(b.executions,0),0,1,b.executions)),2) avg_lios,
+       a.blocking_session                                                      block_ss,
+       sw.state                                                              state,
+       sw.wait_time                                                          wait_time
+from v$session a,
+     v$session_wait sw,
+     v$sql     b,
+     v$process c
+where 
+decode(a.sql_id,null,a.prev_sql_id, a.sql_id)=b.sql_id
+and    decode(a.sql_id,null,a.prev_child_number, a.sql_child_number)=b.child_number
+--a.sql_id           = b.sql_id and   a.sql_child_number = b.child_number
+and	  a.sid              = sw.sid
+and   a.paddr            = c.addr
+and   a.status           = 'ACTIVE'
+and   a.username is not null
+and   a.wait_class      <> 'Idle'
+and   b.sql_text not like '%v$sql%'
+and   a.sid             <> userenv('SID')
+order by b.sql_id,b.plan_hash_value
+```
+
+#### sql_id 查询sql_text
+
+```sql
+----根据sql_id 查询sql_text
+SELECT SQL_TEXT
+  FROM V$SQLTEXT
+ WHERE SQL_ID = '9vx3nrtsc1t6h'
+ ORDER BY PIECE;
+```
+
+#### Session Kill
+
+```sql
+1. 方式1 sid  serial#  kill session 
+-- 根据 sid  serial#  kill session 
+alter system kill session '509,37683' IMMEDIATE ;
+
+2. 方式2 ， 根据OSPID Kill Session
+----根据paddr 查询spid（paddr为v$session中字段，addr为v$process中字段）
+SELECT SPID FROM V$PROCESS WHERE ADDR = 'C000000FE0DAA480';
+
+----根据spid 杀系统进程
+KILL - 9 SPID;
+```
+
+
+
+
 
 #### AWR收集
 
