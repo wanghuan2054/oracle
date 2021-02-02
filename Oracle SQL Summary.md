@@ -495,16 +495,53 @@ MONDAY_WINDOW                  freq=daily;byday=MON;byhour=22;byminute=0; byseco
 7 rows selected
 ```
 
+#### 查看某张表统计信息是否过期
+
+```sql
+--  过期状态查看 STALE_STATS = YES为统计信息失效，NO为正常
+SELECT T.OWNER,
+       T.TABLE_NAME,
+       T.PARTITION_NAME,
+       T.SUBPARTITION_NAME,
+       T.OBJECT_TYPE,
+       T.NUM_ROWS,
+       T.SAMPLE_SIZE,
+       T.LAST_ANALYZED,
+       T.GLOBAL_STATS,
+       T.USER_STATS,
+       T.STALE_STATS
+  FROM ALL_TAB_STATISTICS T
+ WHERE T.OWNER = 'P1MESADM'
+   AND T.TABLE_NAME = 'BSGLASSOUTUNITORSUBUNIT'
+   AND T.STALE_STATS = 'YES'
+   AND T.LAST_ANALYZED IS NOT NULL
+ ORDER BY T.PARTITION_NAME;
+ 
+ --过期原因查看 , 截止上次分析时间后产生的增删改等操作(还有TRUNCATED和DROP_SEGMENTS操作)
+ SELECT TABLE_OWNER,
+       PARTITION_NAME,
+       SUBPARTITION_NAME,
+       TABLE_NAME,
+       INSERTS,
+       UPDATES,
+       DELETES,
+       TIMESTAMP,
+       TRUNCATED,
+       DROP_SEGMENTS
+  FROM ALL_TAB_MODIFICATIONS
+ WHERE TABLE_OWNER = 'P1MESADM'
+   AND TABLE_NAME = 'PRODUCT';
+```
+
+
+
 #### 查看某张表的统计信息
 
 ```sql
 -- 查询某表是否开启了增量统计功能
 SELECT DBMS_STATS.GET_PREFS(PNAME => 'INCREMENTAL',OWNNAME => 'EDBADM',TABNAME=> 'LOT') AS IS_INCRESTATS FROM DUAL;
 
--- 方式1 ， 根据用户表查询表最后统计时间
-SELECT TABLE_NAME,NUM_ROWS,BLOCKS,LAST_ANALYZED FROM USER_TABLES WHERE TABLE_NAME='LOT';
-
--- 方式2  根据ALL_TAB_STATISTICS统计信息查询表最后统计信息
+-- 方式1（推荐） ， 根据用户表查询表最后统计时间 
 SELECT T.OWNER,
        T.TABLE_NAME,
        T.PARTITION_NAME,
@@ -521,8 +558,10 @@ SELECT T.OWNER,
    AND T.TABLE_NAME = 'LOT'
    AND T.LAST_ANALYZED IS NOT NULL
  ORDER BY T.LAST_ANALYZED DESC;
- 
- 
+
+
+-- 方式2  根据ALL_TAB_STATISTICS统计信息查询表最后统计信息
+SELECT TABLE_NAME,NUM_ROWS,BLOCKS,LAST_ANALYZED FROM USER_TABLES WHERE TABLE_NAME='LOT';
 ```
 
 #### 查看某张表上索引统计信息
@@ -543,28 +582,71 @@ SELECT TABLE_NAME,
 
 #### 手动收集统计信息
 
+##### 按照表收集统计信息
+
 ```sql
--- SQL CMD中执行存储过程， 使用用户名和表名
+-- 方法1（推荐）  degree 指定收集并行度
+--  具体参数字段参考 https://docs.oracle.com/en/database/oracle/oracle-database/19/arpls/DBMS_STATS.html#GUID-CA6A56B9-0540-45E9-B1D7-D78769B7714C
+begin
+ dbms_stats.gather_table_stats(ownname=>'EDBADM',
+                               tabname=>'LOTHISTORY',
+                               estimate_percent=>100,
+                               method_opt=>'for all columns size repeat',
+                               no_invalidate=>false,
+                               degree=>4,
+                               cascade=>true);
+ end;
+ /
+ 
+ --方法2  SQL CMD中执行存储过程， 使用用户名和表名
 EXECUTE DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
--- 手动执行完毕后，继续查询表的统计信息，查看LAST_ANALYZED
-
-EXEC DBMS_STATS.GATHER_TABLE_STATS ('FGMSADM','MMSLOGHISTORY');
-
--- 收集分区表的某个分区统计信息
-exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'RANGE_PART_TAB',partname => 'p_201312',estimate_percent => 10,method_opt=> 'for all indexed columns',cascade=>TRUE);  
--- 收集索引统计信息
-exec dbms_stats.gather_index_stats(ownname => 'USER',indname => 'IDX_OBJECT_ID',estimate_percent => '10',degree => '4');  
--- 收集表和索引统计信息 
-exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'TEST',estimate_percent => 10,method_opt=> 'for all indexed columns',cascade=>TRUE);  
--- 收集某个用户的统计信息
-exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
--- 收集整个数据库的统计信息
-exec dbms_stats.gather_database_stats(estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
 ```
 
 
 
+##### 按照分区收集统计信息
+
+```sql
+-- 收集分区表的某个分区统计信息
+BEGIN
+  DBMS_STATS.FLUSH_DATABASE_MONITORING_INFO;
+    DBMS_STATS.GATHER_TABLE_STATS(OWNNAME          => 'EDBADM',
+                                  TABNAME          => 'LOTHISTORY',
+                                  PARTNAME         => 'LOTHISTORY_202007',
+                                  ESTIMATE_PERCENT => 100,
+                                  METHOD_OPT       => 'for all columns size repeat',
+                                  DEGREE           => 4,
+                                  GRANULARITY      => 'ALL',
+                                  CASCADE          => TRUE);
+END;
+```
+
+按照索引收集统计信息
+
+```sql
+-- 收集索引统计信息
+exec dbms_stats.gather_index_stats(ownname => 'USER',indname => 'IDX_OBJECT_ID',estimate_percent => '10',degree => '4');  
+-- 收集表和索引统计信息 
+exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'TEST',estimate_percent => 10,method_opt=> 'for all indexed columns',cascade=>TRUE);  
+```
+
+按照用户收集统计信息
+
+```sql
+-- 收集某个用户的统计信息
+exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
+```
+
+按照数据库收集统计信息
+
+```sql
+-- 收集整个数据库的统计信息
+exec dbms_stats.gather_database_stats(estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
+```
+
 #### 分区删除
+
+##### 正常删除
 
 ```sql
 /*删除周分区*/
@@ -576,6 +658,110 @@ alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200504;
 /*删除月分区*/
 alter table ALARMINTERFACETOPMS drop partition PM1902;
 ```
+
+##### 调用存储过程删除
+
+```sql
+/*
+  PVVI_TABLE_NAME ： 表名
+  PVVI_START_PARTITION_NAME ： 开始分区名
+  PVVI_END_PARTITION_NAME：结束分区名
+*/
+-- 调用方式1 
+CALL DROP_PARTITION_BY_TABLE('CDS_MATERIALPACKING','PM201901','PM201905')
+
+-- 调用方式2 
+begin
+  -- Call the procedure
+  drop_partition_by_table(pvvi_table_name => 'CDS_MATERIALPACKING',
+                          pvvi_start_partition_name => 'PM201901',
+                          pvvi_end_partition_name => 'PM201905');
+end;
+
+-- DROP_PARTITION_BY_TABLE 源码
+CREATE OR REPLACE PROCEDURE DROP_PARTITION_BY_TABLE(PVVI_TABLE_NAME           IN VARCHAR2,
+                                                    PVVI_START_PARTITION_NAME IN VARCHAR2,
+                                                    PVVI_END_PARTITION_NAME   IN VARCHAR2) AS
+
+  --=================================================================================
+  --OBJECT NAME : DROP_PARTITION_BY_TABLE
+  --OBJECT TYPE : STORED PROCEDURE
+  --DESCRIPTION : DROP PARTITION BY TABLE
+  -- PVVI_TABLE_NAME  传入的表名
+  -- PVVI_START_PARTITION_NAME  传入要删除的开始分区名
+  -- PVVI_END_PARTITION_NAME    传入要删除的结束分区名
+  -- PVVO_RETURN_VALUE 返回值
+  --=================================================================================
+  --
+  --=================================================================================
+  --YYYY-MM-DD      DESCRIPTOR       DESCRIPTION
+  --2021-01-21      WANGHUAN        通过表名、删除介于开始分区和结束分区名之间的分区数据（包含开始结束分区数据）
+  --=================================================================================
+  --
+  --=================================================================================
+  --                               VARIALBLE DECLARATION
+  --=================================================================================
+  LVV_SQLEXEC VARCHAR2(200);
+  LVV_TABLE_NAME VARCHAR2(100);
+  LVV_START_PARTITION_NAME VARCHAR2(100);
+  LVV_END_PARTITION_NAME VARCHAR2(100);
+  V_CHOOSE_PARTITION_NAME VARCHAR2(100);
+
+  -- 表分区的游标定义 , 选择出介于PVVI_START_PARTITION_NAME 和 PVVI_END_PARTITION_NAME之间的所有分区名
+  CURSOR PARTITION_CURSOR IS
+    SELECT PARTITION_NAME
+           --,TABLE_NAME,
+           --TABLESPACE_NAME,
+           --A.BLOCKS * 8 / 1024 / 1024 GB,
+           --A.NUM_ROWS,
+           --A.LAST_ANALYZED
+      FROM USER_TAB_PARTITIONS A
+     WHERE TABLE_NAME = LVV_TABLE_NAME -- 'EDS_EDC_BSPRODUCT_DATA_ITEM'
+       AND A.PARTITION_NAME >= LVV_START_PARTITION_NAME -- 'PD20181116'
+       AND A.PARTITION_NAME <= LVV_END_PARTITION_NAME -- 'PD20181201'
+       GROUP BY PARTITION_NAME
+     ORDER BY A.PARTITION_NAME;
+
+  --=================================================================================
+  --                                 MAIN PROGRAM
+  --=================================================================================
+  --=============================================================
+  -- VARIABLE INITIALIZATION
+  --=============================================================
+BEGIN
+      -- 对传入参数的大小写做统一转换
+      LVV_TABLE_NAME := UPPER(PVVI_TABLE_NAME);
+      LVV_START_PARTITION_NAME := UPPER(PVVI_START_PARTITION_NAME);
+      LVV_END_PARTITION_NAME := UPPER(PVVI_END_PARTITION_NAME);
+    -- 设置DBMS打印输出缓冲区大小 字节数
+    DBMS_OUTPUT.ENABLE(1000000);
+    IF LVV_TABLE_NAME IS NULL THEN 
+        DBMS_OUTPUT.PUT_LINE('表名为空');
+        --PVVO_RETURN_VALUE := '表名为空' ;
+        RETURN ;
+    END IF ;
+    BEGIN
+        OPEN PARTITION_CURSOR;
+        LOOP
+          FETCH PARTITION_CURSOR
+            INTO V_CHOOSE_PARTITION_NAME;
+          EXIT WHEN PARTITION_CURSOR%NOTFOUND;
+            LVV_SQLEXEC := 'ALTER TABLE ' || LVV_TABLE_NAME || ' DROP PARTITION ' ||
+                         V_CHOOSE_PARTITION_NAME;
+            DBMS_OUTPUT.PUT_LINE(LVV_SQLEXEC);
+            DBMS_UTILITY.EXEC_DDL_STATEMENT(LVV_SQLEXEC);
+        END LOOP;
+        --PVVO_RETURN_VALUE := '分区删除成功' ;
+        CLOSE PARTITION_CURSOR;
+     END;
+EXCEPTION
+  WHEN OTHERS THEN
+    --PVVO_RETURN_VALUE := '分区删除失败' ;
+    DBMS_OUTPUT.PUT_LINE('分区删除失败');
+END DROP_PARTITION_BY_TABLE;
+```
+
+
 
 #### 查看指定分区数据 
 
@@ -1029,12 +1215,38 @@ and   a.wait_class      <> 'Idle'
 and   b.sql_text not like '%v$sql%'
 and   a.sid             <> userenv('SID')
 order by b.sql_id,b.plan_hash_value
+
+-- 可以查看SQL_TEXT  , DISK_READS(物理读) , BUFFER_GETS（逻辑读）
+SELECT 'alter system kill session ' || '''' || S.SID || ',' || S.SERIAL# || '''' ||
+       ' IMMEDIATE' AS KILL_SESSION,
+       'kill -9 ' || P.SPID AS KILL_SESSION,
+       S.MACHINE,
+       S.OSUSER,
+       S.PROGRAM,
+       S.USERNAME,
+       S.LAST_CALL_ET,
+       A.SQL_ID,
+       S.LOGON_TIME,
+       A.SQL_TEXT,
+       A.SQL_FULLTEXT,
+       W.EVENT,
+       A.DISK_READS,
+       A.BUFFER_GETS
+  FROM V$PROCESS P, V$SESSION S, V$SQLAREA A, V$SESSION_WAIT W
+ WHERE P.ADDR = S.PADDR
+   AND S.SQL_ID = A.SQL_ID
+   AND S.SID = W.SID
+   AND S.STATUS = 'ACTIVE'
+ ORDER BY S.LAST_CALL_ET DESC;
 ```
 
 #### sql_id 查询sql_text
 
 ```sql
-----根据sql_id 查询sql_text
+--方式1（推荐）  
+SELECT SQL_TEXT FROM V$SQL WHERE SQL_ID = '1z726wtx5dt95';
+ 
+--方式2 
 SELECT SQL_TEXT
   FROM V$SQLTEXT
  WHERE SQL_ID = '9vx3nrtsc1t6h'
@@ -1164,6 +1376,39 @@ press <return> to continue, otherwise enter an alternative.
 Enter value for report_name: /tmp/awrrpt_2_65327_65328.html
 
 html默认下载路径为/tmp/awrrpt_2_65327_65328.html (awr报告存放路径可以指定)
+```
+
+####  DB Time
+
+```sql
+-- 查询指定INSTANCE实例的DB Time
+SELECT *
+  FROM (SELECT INSTANCE_NAME,
+               SNAP_ID,
+               SNAP_TIME,
+               ROUND((VALUE - V) / 60 / 1000000, 2) DB_TIME
+          FROM (SELECT INSTANCE_NAME,
+                       SNAP_ID,
+                       SNAP_TIME,
+                       VALUE,
+                       (LAG(VALUE)
+                        OVER(PARTITION BY INSTANCE_NAME ORDER BY SNAP_ID)) V
+                  FROM (SELECT I.INSTANCE_NAME,
+                               SP.SNAP_ID - 1 AS SNAP_ID,
+                               TO_CHAR(BEGIN_INTERVAL_TIME, 'mm-dd hh24:mi:ss') SNAP_TIME,
+                               VALUE
+                          FROM DBA_HIST_SNAPSHOT       SP,
+                               DBA_HIST_SYS_TIME_MODEL SY,
+                               GV$INSTANCE             I
+                         WHERE SP.SNAP_ID = SY.SNAP_ID
+                           AND SP.INSTANCE_NUMBER = SY.INSTANCE_NUMBER
+                           AND SY.INSTANCE_NUMBER = I.INSTANCE_NUMBER
+                           AND SP.BEGIN_INTERVAL_TIME >= SYSDATE - 8
+                              --and to_char(sp.begin_interval_time, 'hh24:mi:ss') BETWEEN '06:00:00' AND '21:30:00'
+                           AND SY.STAT_NAME = 'DB time'))) DBTIMESQL
+ WHERE DBTIMESQL.DB_TIME >= 0
+ AND INSTANCE_NAME = 'mdwdb3'
+ ORDER BY INSTANCE_NAME, SNAP_ID DESC;
 ```
 
 
