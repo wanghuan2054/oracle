@@ -219,6 +219,72 @@ FROM DBA_USERS
 WHERE USERNAME = 'EDBADM';
 ```
 
+####  查询所有临时表名字和空间大小 
+
+```sql
+    SELECT D.TABLESPACE_NAME,
+           SPACE "SUM_SPACE(M)",
+           BLOCKS SUM_BLOCKS,
+           USED_SPACE "USED_SPACE(M)",
+           ROUND(NVL(USED_SPACE, 0) / SPACE * 100, 2) "USED_RATE(%)",
+           NVL(FREE_SPACE, 0) "FREE_SPACE(M)"
+      FROM (SELECT TABLESPACE_NAME,
+                   ROUND(SUM(BYTES) / (1024 * 1024), 2) SPACE,
+                   SUM(BLOCKS) BLOCKS
+              FROM DBA_TEMP_FILES
+             GROUP BY TABLESPACE_NAME) D,
+           (SELECT TABLESPACE_NAME,
+                   ROUND(SUM(BYTES_USED) / (1024 * 1024), 2) USED_SPACE,
+                   ROUND(SUM(BYTES_FREE) / (1024 * 1024), 2) FREE_SPACE
+              FROM V$TEMP_SPACE_HEADER
+             GROUP BY TABLESPACE_NAME) F
+     WHERE D.TABLESPACE_NAME = F.TABLESPACE_NAME(+);
+
+```
+
+####  查询临时表名对应的使用情况 
+
+```sql
+SELECT D.TABLESPACE_NAME,
+       SPACE "SUM_SPACE(M)",
+       BLOCKS "SUM_BLOCKS",
+       USED_SPACE "USED_SPACE(M)",
+       ROUND(NVL(USED_SPACE, 0) / SPACE * 100, 2) "USED_RATE(%)",
+       SPACE - USED_SPACE "FREE_SPACE(M)"
+  FROM (SELECT TABLESPACE_NAME,
+               ROUND(SUM(BYTES) / (1024 * 1024), 2) SPACE,
+               SUM(BLOCKS) BLOCKS
+          FROM DBA_TEMP_FILES
+         GROUP BY TABLESPACE_NAME) D,
+       (SELECT TABLESPACE,
+               ROUND(SUM(BLOCKS * 8192) / (1024 * 1024), 2) USED_SPACE
+          FROM V$SORT_USAGE
+         GROUP BY TABLESPACE) F
+ WHERE D.TABLESPACE_NAME = F.TABLESPACE(+)
+   AND D.TABLESPACE_NAME IN ('EDASYS_TEMP01', 'EDASYS_TEMP02')
+
+```
+
+####  **查询临时表空间状态** 
+
+```sql
+-- 查询临时表空间状态
+ SELECT TABLESPACE_NAME,
+        FILE_NAME,
+        BYTES / 1024 / 1024 FILE_SIZE,
+        AUTOEXTENSIBLE
+   FROM DBA_TEMP_FILES;
+   
+-- 查询默认临时表空间：   
+   
+   SELECT *
+  FROM DATABASE_PROPERTIES
+ WHERE PROPERTY_NAME = 'DEFAULT_TEMP_TABLESPACE';
+
+```
+
+
+
 #### **表空间Rank**
 
 ```sql
@@ -1332,7 +1398,7 @@ and   a.username is not null
 and   a.wait_class      <> 'Idle'
 and   b.sql_text not like '%v$sql%'
 and   a.sid             <> userenv('SID')
-order by b.sql_id,b.plan_hash_value
+order by b.sql_id,b.plan_hash_value;
 
 -- 可以查看SQL_TEXT  , DISK_READS(物理读) , BUFFER_GETS（逻辑读）
 SELECT 'alter system kill session ' || '''' || S.SID || ',' || S.SERIAL# || '''' ||
