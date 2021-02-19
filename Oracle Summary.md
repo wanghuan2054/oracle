@@ -117,6 +117,28 @@ dbstart  --开启数据库连接
 dbshut --关闭数据库链接；
 ```
 
+### **hpux操作系统的关机与重启命令**
+
+```shell
+# 关机 , halt ， 0代表0s后，即立即关机
+shutdown -hy 0
+
+# 强制重启 ，  reboot ， 0代表0s后，即立即重启
+shutdown -ry 0 
+
+# shutdown 常用搭配参数
+# 惯用的关机指令： shutdown
+-t sec ： -t 后面加秒数，过几秒后关机
+-k ： 不要真的关机，只是发送警告讯息出去
+-r ： reboot , 在将系统的服务停掉之后就重新开机(常用)
+-h ： halt关机停机 , 将系统的服务停掉后，立即关机。(常用)
+-n ： 不经过init 程序，直接以shutdown 的功能来关机
+-f ： 关机并开机之后，强制略过fsck 的磁盘检查
+-F ： 系统重新开机之后，强制进行fsck 的磁盘检查
+-c ： 取消已经在进行的shutdown 指令内容
+-y : 操作过程中的所有查询强制回答"是"。 
+```
+
 
 
 ### **配置参数查询**
@@ -329,6 +351,8 @@ SELECT A.TABLESPACE_NAME,
    AND A.TABLESPACE_NAME = C.TABLESPACE_NAME
  ORDER BY 2 DESC; 
 ```
+
+
 
 #### **根据表空间名字查询dbf及Block ID**
 
@@ -1250,6 +1274,18 @@ Current log sequence           210816
 -- rman 登录
 $ rman target /
 
+-- 检查一些无用的archivelog
+RMAN> crosscheck archivelog all;
+
+-- 删除过期的归档
+RMAN> delete expired archivelog all;
+
+-- 删除截止到前一天的所有归档
+delete archivelog until time 'sysdate-1' ; 
+
+-- 直接删除当前所有归档
+delete archivelog until time 'sysdate';
+
 -- rman 删除归档 （“1”对应是一天，若想删除6小时前的归档日志，则改为0.25）
 RMAN> delete archivelog all completed before 'sysdate-1'; 
 
@@ -1345,6 +1381,22 @@ $ find /home/oracle/daycheck/log -name '*.log'  -mtime +30  | xargs rm -rf
 
 -- 另外一种写法
 /usr/bin/find $LOGDIR -name '*_*_*.log.gz' -mtime +5 -exec rm -f {} \;
+```
+
+#### 日志自动清理脚本
+
+##### Unix OS
+
+```shell
+
+```
+
+
+
+##### Windows
+
+```shell
+
 ```
 
 
