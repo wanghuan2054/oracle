@@ -1,0 +1,21 @@
+下面是启动并配置OSWatcher的例子： 
+
+1). 将下载后的压缩文件上传到主机并解压（建议放到规划好的目录，如$oracle_base下面，不要被当作临时文件清理了）。 
+
+2). 设置私网间通讯检查： 
+a) 拷贝Exampleprivate.net 为 private.net 到同一个目录下。 
+b).在private.net中找到您对应的系统平台，替换下面的private_nodename1 ， private_nodename2 为具体的私网IP或者私网主机名 
+traceroute -r -F private_nodename1 
+traceroute -r -F private_nodename2 
+c). 将private.net中其它的平台部分删除。 
+d). 千万不要删除下面的内容： 
+rm locks/lock.file 
+
+3).启动OSWather: 
+进入到解压目录执行：
+nohup ./startOSWbb.sh 5 120 & 
+==>会每隔5秒搜集一次数据，将结果保留120 小时(5 天)。请根据您的需求，调整这保留参数。（建议5s间隔,天数根据实际情况设置，预估每天也就1-2G的数据）
+==>生成的结果会存储在一个叫archive的目录中。 
+==>请确保您的磁盘空间足够容纳这些数据。 
+==>如果您想自动压缩生成的文件，请使用下面的命令来启动OSWatcher： 
+nohup ./startOSWbb.sh 5 120 gzip & 
