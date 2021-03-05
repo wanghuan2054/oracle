@@ -274,6 +274,25 @@ SELECT *   FROM user_tables T ;
 SELECT COUNT(*) AS TBALE_NUMS  FROM user_tables T ;
 ```
 
+#### 查看当前用户下所有表,按照表空间占用倒序
+
+```sql
+SELECT A.SEGMENT_NAME,
+       A.TABLESPACE_NAME,
+       A.SEGMENT_TYPE,
+       SUM(A.BYTES) / 1024 / 1024 / 1024 AS "TOTAL(G)"
+  FROM DBA_SEGMENTS A
+ WHERE A.OWNER = 'EDBADM'
+   AND A.SEGMENT_TYPE LIKE '%TABLE%'
+   AND A.SEGMENT_NAME NOT LIKE 'BIN%'
+   AND A.SEGMENT_NAME NOT LIKE 'SYS%'
+ GROUP BY A.SEGMENT_NAME, A.TABLESPACE_NAME, A.SEGMENT_TYPE
+ ORDER BY 4 DESC;
+ 
+ 
+ 
+```
+
 ### **表空间**
 
 #### 查看默认表空间和临时表空间
@@ -747,6 +766,29 @@ ALTER TABLESPACE MOD_LOTHIST_IDX ADD DATAFILE '+DATA' SIZE 20G AUTOEXTEND ON NEX
 
 ```
 
+#### 查看分区表中非Local索引
+
+```sql
+-- 查看分区表中非Local索引
+SELECT A.TABLE_NAME,
+       B.INDEX_NAME,
+       B.INDEX_TYPE,
+       B.TABLE_NAME,
+       B.STATUS,
+       B.PARTITIONED
+  FROM DBA_TAB_PARTITIONS A
+  LEFT JOIN USER_INDEXES B
+    ON (A.TABLE_NAME = B.TABLE_NAME)
+ WHERE --B.STATUS = 'UNUSABLE'
+ B.PARTITIONED = 'NO'
+ GROUP BY A.TABLE_NAME,
+          B.INDEX_NAME,
+          B.INDEX_TYPE,
+          B.TABLE_NAME,
+          B.STATUS,
+          B.PARTITIONED;
+```
+
 
 
 #### 查看分区表统计信息
@@ -871,7 +913,11 @@ auto space advisor                                               ENABLED
 sql tuning advisor                                               ENABLED
 
 --修改为表级增量统计，
+-- exec 只能在SQL PLUS中执行 CMD命令行执行
 exec dbms_stats.set_table_prefs('EDBADM','ODS_PRODUCTHISTORY_LOC','INCREMENTAL','TRUE');
+
+-- 可以在CMD窗口和PLSQL中都可以执行
+CALL DBMS_STATS.SET_TABLE_PREFS('EDBADM','LOTHISTORY','INCREMENTAL','TRUE');
 
 --查看表级增量统计修改结果
 SELECT DBMS_STATS.GET_PREFS(PNAME => 'INCREMENTAL',OWNNAME => 'EDBADM',TABNAME=> 'EDS_LOT') AS IS_INCRESTATS FROM DUAL;
@@ -928,7 +974,7 @@ SQL> BEGIN
 PL/SQL 过程已成功完成。
 5.查看修改后的情况：
 SQL> select t1.window_name,t1.repeat_interval,t1.duration from dba_scheduler_windows t1,dba_scheduler_wingroup_members t2
-  2  where t1.window_name=t2.window_name and t2.window_group_name in ('MAINTENANCE_WINDOW_GROUP','BSLN_MAINTAIN_STATS_SCHED');
+   where t1.window_name=t2.window_name and t2.window_group_name in ('MAINTENANCE_WINDOW_GROUP','BSLN_MAINTAIN_STATS_SCHED');
  
 WINDOW_NAME                    REPEAT_INTERVAL                                                                  DURATION
 ------------------------------ -------------------------------------------------------------------------------- -------------------------------------------------------------------------------
@@ -1048,7 +1094,22 @@ SELECT TABLE_NAME,
  WHERE TABLE_NAME IN ('EDS_ENERGY_EHS');
 ```
 
+#### 如何删除tablespace
 
+##### 删除立即回收空间(推荐)
+
+```sql
+-- 删除表空间以及包含的对象和数据文件
+DROP TABLESPACE EDS_EES_PAR_1704 INCLUDING CONTENTS  AND DATAFILES;
+```
+
+##### 删除定时回收空间
+
+```sql
+-- 删除表空间, 等过一段时间，系统自动就回收了 , 
+-- inode不会马上释放，重启后就会OK
+DROP TABLESPACE EDS_EES_PAR_1704 ;
+```
 
 #### 手动收集统计信息
 
@@ -1478,12 +1539,12 @@ SELECT OWNER, OBJECT_NAME, STATUS
 SELECT *
   FROM DBA_IND_PARTITIONS  L
  WHERE L.INDEX_OWNER IN ('EDBADM')
-   AND L.STATUS = 'USABLE';
+   AND L.STATUS = 'UNUSABLE';
    
   SELECT L.STATUS , L.*
   FROM DBA_IND_PARTITIONS  L
  WHERE L.Index_Name = 'IDX_LOTHISTORY_01'
-   AND L.STATUS = 'USABLE';
+   AND L.STATUS = 'UNUSABLE';
 ```
 
 
@@ -2169,6 +2230,26 @@ DROP INDEX EDBADM.EDS_EDC_BSPRODUCT_DATA_IDX_05;
 --在线重建索引
 ALTER INDEX EDBADM.EDS_BSALARM_HIST_PK REBUILD PARALLEL 12 NOLOGGING ONLINE ;
 ALTER INDEX P1MESADM.BSLOTPROCESSDATAITEM_PK REBUILD PARALLEL 2;
+
+
+
+-- Create/Recreate indexes （推荐）
+Create index MACHINEHISTORY_IDX on MACHINEHISTORY (MACHINENAME, EVENTTIME)
+  tablespace EDS_OGG_TBS
+  pctfree 10
+  initrans 10
+  maxtrans 255
+  storage
+  (
+    initial 64K
+    next 1M
+    minextents 1
+    maxextents unlimited
+  )
+  NOLOGGING 
+  LOCAL 
+  PARALLEL 4 
+  ONLINE; 
 
 ```
 
@@ -2897,6 +2978,17 @@ GRANT READ,WRITE ON DIRECTORY DATAPUMP_DIR TO p1modadm;
 impdp p1modadm/adm2020 directory=DATAPUMP_DIR dumpfile=T1MODADM.dmp  LOGFILE=T1MODADM.log schemas=T1MODADM remap_schema=T1MODADM:P1MODADM remap_tablespace=T1MODADM_DAT:MOD_CUSTOMS_DAT,b12modmes:MOD_CUSTOMS_DAT,b4fabadm_dat:MOD_CUSTOMS_DAT,b4idm_dat:MOD_CUSTOMS_DAT,b6fabadm_dat:MOD_CUSTOMS_DAT,b6masterdata_dat:MOD_CUSTOMS_DAT,b6test01_dat:MOD_CUSTOMS_DAT,custom:MOD_CUSTOMS_DAT,d1mesadm_dat:MOD_CUSTOMS_DAT,d1modadm_dat:MOD_CUSTOMS_DAT,d1rtdadm_dat:MOD_CUSTOMS_DAT,d2mesadm_dat:MOD_CUSTOMS_DAT,goldengate:MOD_CUSTOMS_DAT,t1mesadm_dat:MOD_CUSTOMS_DAT,t1rtdadm_dat:MOD_CUSTOMS_DAT
 impdp SYSTEM/SYSTEM directory=DATAPUMP_DIR dumpfile=T1MODADM.dmp  LOGFILE=T1MODADM.log schemas=T1MODADM remap_schema=T1MODADM:P1MODADM remap_tablespace=T1MODADM_DAT:MOD_CUSTOMS_DAT,b12modmes:MOD_CUSTOMS_DAT,b4fabadm_dat:MOD_CUSTOMS_DAT,b4idm_dat:MOD_CUSTOMS_DAT,b6fabadm_dat:MOD_CUSTOMS_DAT,b6masterdata_dat:MOD_CUSTOMS_DAT,b6test01_dat:MOD_CUSTOMS_DAT,custom:MOD_CUSTOMS_DAT,d1mesadm_dat:MOD_CUSTOMS_DAT,d1modadm_dat:MOD_CUSTOMS_DAT,d1rtdadm_dat:MOD_CUSTOMS_DAT,d2mesadm_dat:MOD_CUSTOMS_DAT,goldengate:MOD_CUSTOMS_DAT,t1mesadm_dat:MOD_CUSTOMS_DAT,t1rtdadm_dat:MOD_CUSTOMS_DAT
 ```
+
+## **数据治理**
+
+### 数据治理配置表
+
+```sql
+
+SELECT T.* FROM DIM_DATA_GOVERNANCE_CONFIG T;
+```
+
+
 
 
 
