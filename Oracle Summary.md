@@ -288,9 +288,6 @@ SELECT A.SEGMENT_NAME,
    AND A.SEGMENT_NAME NOT LIKE 'SYS%'
  GROUP BY A.SEGMENT_NAME, A.TABLESPACE_NAME, A.SEGMENT_TYPE
  ORDER BY 4 DESC;
- 
- 
- 
 ```
 
 ### **表空间**
@@ -325,7 +322,7 @@ SELECT T1.TABLE_NAME, NVL(T1.TABLESPACE_NAME, 'USERS') AS TABLESPACE_NAME , T1.P
   ON (T1.TABLE_NAME = T2.TABLE_NAME AND DATA_TYPE IN ('BLOB', 'CLOB')
    AND OWNER = 'P1MODADM')
  WHERE T1.TABLE_NAME NOT LIKE '%SYS%'
- --AND TABLE_NAME LIKE '%LOTHISTORY%'
+ --AND T1.TABLE_NAME LIKE '%LOTHISTORY%'
  ORDER BY T1.TABLE_NAME;
 ```
 
@@ -1180,7 +1177,7 @@ exec dbms_stats.gather_table_stats(ownname => 'USER',tabname => 'TEST',estimate_
 
 ```sql
 -- 收集某个用户的统计信息 ， 用于收集指定schema下的所有对象统计信
-exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
+exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');
 ```
 
 按照数据库收集统计信息
@@ -2253,6 +2250,86 @@ Create index MACHINEHISTORY_IDX on MACHINEHISTORY (MACHINENAME, EVENTTIME)
 
 ```
 
+#### OGG 单向部分列同步
+
+```sql
+-- 实现部分列同步,主要在extract端使用COLS捕获需要列
+-- 使用COLS限制源端部分列
+GSCI (test) 1> edit param ext_1
+EXTRACT ext_1
+userid ogg,password oracle
+REPORTCOUNT EVERY 1 MINUTES, RATE
+numfiles 5000
+DISCARDFILE ./dirrpt/ext_1.dsc,APPEND,MEGABYTES 1024
+DISCARDROLLOVER AT 3:00
+exttrail ./dirdat/r1,megabytes 100
+dynamicresolution
+TRANLOGOPTIONS DISABLESUPPLOGCHECK   --bug 16857778
+TABLE AA.test, COLS (OWNER, OBJECT_NAME, SUBOBJECT_NAME, OBJECT_ID) 
+```
+
+参考文档：https://www.cnblogs.com/ss-33/p/12930363.html
+
+#### OGG中使用FILTER,COMPUTE 和SQLEXEC命令
+
+```sql
+SQLPREDICATE
+在使用OGG初始化时，可以添加此参数到extract中，用于选择符合条件的记录，下面是OGG官方文档中的描述 ：
+“在用OGG初始化数据时，使用SQLPredicate是比where或filter更好的一个选项。使用此语句比其它参数初始化更快，因为它直接作用于SQL语句，告诉OGG不应该取所有数据之后再过滤（这正是其它参数的运行方式），而是应该只取需要的部分。”
+如下
+TABLE ggs_owner.emp_details, SQLPREDICATE “where ename=’Gavin’”;
+针对目标端的数据过滤，仍然可以在replicat上使用where条件进行数据过滤，即只取extract出来的部分数据进行投递，如下：
+MAP ggs_owner.emp_details, TARGET ggs_owner.emp_details, WHERE (ename=”Gavin”);
+FILTER
+Filter的功能远比where强大，你可以在任何有字段转换的地方使用它进行数据过滤，而where只能使用基本的操作符。比如，我们可以在OGG的这些函数（@COMPUTE, @DATE, @STRFIND, @STRNUM等）中使用数值运算符：
+‘+’,’-’,’/’,’*’或比较操作符‘>’,’<', '='。
+下面的配置示例中我们在extract中使用STRFIND函数，捕获ename字段中只符合相应条件的记录，配置如下：
+TABLE ggs_owner.emp_details,FILTER (@STRFIND (ename, “Gavin”) > 0);
+COMPUTE
+接下来的示例讲解如何使用@COMPUTE函数，本示例中基于某原始字段值，计算同一张表中其它字段的值。
+
+在本示例中的目标表EMP与源表结构不同，目标表上有多出来的一个字段COMM。COMM字段的值由源字段SAL*1.1计算得到。由于两边表结构不同，因此，我们需要先用defgen程序创建一个定义文件。
+首先，我们在目标端上基于EMP表创建defgen参数文件：
+edit params defgen
+DEFSFILE /home/oracle/goldengate/dirsql/emp.sql
+USERID ggs_owner, PASSWORD ggs_owner
+TABLE ggs_owner.emp;
+然后在OGG安装目录下执行：
+[oracle@linux02 goldengate]$ ./defgen paramfile ./dirprm/defgen.prm
+目标端的replicat参数文件定义如下，里面用到了colmap和compute。colmap中的useDefaults告诉OGG，源和目标表的字段按名称自动匹配，而目标表的comm字段，则由源端的sal字段运算得到。
+REPLICAT rep1
+USERID ggs_owner, PASSWORD *********
+SOURCEDEFS /home/oracle/goldengate/dirsql/emp.sql
+MAP ggs_owner.emp_details, TARGET ggs_owner.emp_details,
+COLMAP (usedefaults,
+comm= @compute(sal +sal *.10));
+基于上面的配置进行数据同步测试，可以看到目标表中comm的字段值是sal字段值的1.1倍，如下：
+SQL> select * from emp;
+
+     EMPNO ENAME                    DEPTNO        SAL       COMM
+
+---------- -------------------- ---------- ---------- ----------
+
+      1001 Gavin                        10       1000       1100
+
+      1002 Mark                         20       2000       2200
+
+      1003 John                         30       3000       3300
+
+SQLEXEC
+
+SQLEXEC可以在extract或replicat中用于执行SQL语句、存储过程或SQL函数。比如，针对大批量的数据加载，我们可以先将表的索引删除，待数据加载完成之后，再重建索引，从而提高数据同步的性能。在下面replicat示例中，可以看到类似的配置示例：
+
+REPLICAT rep1
+USERID ggs_owner, PASSWORD ggs_owner
+ASSUMETARGETDEFS
+sqlexec “drop index loc_ind”;
+MAP ggs_owner.emp_details, TARGET ggs_owner.emp_details, WHERE (location=”Sydney”);
+sqlexec “create index loc_ind on emp_details(location)”;
+```
+
+#### 参考文档：https://www.cnblogs.com/quanweiru/p/4957633.html
+
 #### OGG 单向同步
 
 ##### 同步前准备
@@ -2983,10 +3060,68 @@ impdp SYSTEM/SYSTEM directory=DATAPUMP_DIR dumpfile=T1MODADM.dmp  LOGFILE=T1MODA
 
 ### 数据治理配置表
 
+#### CREATE TABLE  DDL
+
 ```sql
+-- CREATE TABLE 
+-- CREATE TABLE
+CREATE TABLE DIM_DATA_GOVERNANCE_CONFIG
+(
+  TABLE_NAME         VARCHAR2(50) NOT NULL,
+  CREATE_DURATION    NUMBER,
+  RETENTION_DURATION NUMBER,
+  PARTITION_PREFIX   VARCHAR2(30),
+  PARTITION_FORMAT   VARCHAR2(20),
+  PARTITION_PERIOD   VARCHAR2(5) NOT NULL,
+  DISABLED           VARCHAR2(2) DEFAULT 'N' NOT NULL,
+  DESCRIPTION        VARCHAR2(100),
+  LAST_UPDATED       DATE
+)
+TABLESPACE MOD_CUSTOMS_DAT
+  PCTFREE 10
+  INITRANS 1
+  MAXTRANS 255
+  STORAGE
+  (
+    INITIAL 64K
+    NEXT 1M
+    MINEXTENTS 1
+    MAXEXTENTS UNLIMITED
+  );
+-- CREATE/RECREATE PRIMARY, UNIQUE AND FOREIGN KEY CONSTRAINTS 
+ALTER TABLE DIM_DATA_GOVERNANCE_CONFIG
+  ADD CONSTRAINT DIM_DATA_GOVERNANCE_CONFIG_PK PRIMARY KEY (TABLE_NAME)
+  USING INDEX 
+  TABLESPACE MOD_CUSTOMS_IDX
+  PCTFREE 10
+  INITRANS 2
+  MAXTRANS 255
+  STORAGE
+  (
+    INITIAL 64K
+    NEXT 1M
+    MINEXTENTS 1
+    MAXEXTENTS UNLIMITED
+  );
+
 
 SELECT T.* FROM DIM_DATA_GOVERNANCE_CONFIG T;
 ```
+
+#### 表结构释义
+
+```yaml
+TABLE_NAME : 表名 
+CREATE_DURATION: 分区表分区创建时长 ， PARTITION_PERIOD若为D，对应创建从当前时间开始180天的天分区
+RETENTION_DURATION ：数据保留时长，对分区表是分区保留时长drop partition，对于非分区表，delete数据期限
+PARTITION_PREFIX ：分区表的分区名称前缀
+PARTITION_FORMAT  ： 分区表的分区后缀日期格式，如YYYYMMDD ， YYYYMM等
+PARTITION_PERIOD ：分区周期，D代表DAY,W代表WEEK,M代表MONTH,Y代表YEAR,N代表非分区表NORMAL 
+DISABLED : 是否启用该表的自动管理方式。 启用Y ， 不启用N
+DESCRIPTION：其他备注描述内容   
+```
+
+
 
 
 
