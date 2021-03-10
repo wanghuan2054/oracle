@@ -317,7 +317,7 @@ WITH TAB_IDX_TBS AS
         SELECT A.INDEX_NAME AS TABLE_NAME, A.TABLESPACE_NAME , A.PARTITIONED , 'INDEX' AS TYPE
           FROM USER_INDEXES A )
 
-SELECT T1.TABLE_NAME, NVL(T1.TABLESPACE_NAME, 'USERS') AS TABLESPACE_NAME , T1.PARTITIONED , T1.TYPE , T2.COLUMN_NAME, T2.DATA_TYPE
+SELECT T1.TABLE_NAME, T1.TABLESPACE_NAME , T1.PARTITIONED , T1.TYPE , T2.COLUMN_NAME, T2.DATA_TYPE
   FROM TAB_IDX_TBS T1 LEFT OUTER JOIN ALL_TAB_COLUMNS T2
   ON (T1.TABLE_NAME = T2.TABLE_NAME AND DATA_TYPE IN ('BLOB', 'CLOB')
    AND OWNER = 'P1MODADM')
@@ -986,6 +986,46 @@ MONDAY_WINDOW                  freq=daily;byday=MON;byhour=22;byminute=0; byseco
 7 rows selected
 ```
 
+#### 自动开启表级增量统计
+
+```sql
+-- 如何查询当前用户下，未开启增量统计的表，并自动开启自动统计功能
+DECLARE
+  IS_INCRESTATS VARCHAR2(100);
+  TABLE_NAME    VARCHAR2(100);
+BEGIN
+  FOR REC IN (SELECT A.SEGMENT_NAME,
+                     A.TABLESPACE_NAME,
+                     A.SEGMENT_TYPE,
+                     SUM(A.BYTES) / 1024 / 1024 / 1024 AS "TOTAL(G)"
+                FROM DBA_SEGMENTS A
+               WHERE A.OWNER = 'EDBADM'
+                 AND A.SEGMENT_TYPE LIKE '%TABLE%'
+                 AND A.SEGMENT_NAME NOT LIKE 'BIN%'
+                 AND A.SEGMENT_NAME NOT LIKE 'SYS%'
+               GROUP BY A.SEGMENT_NAME, A.TABLESPACE_NAME, A.SEGMENT_TYPE
+               ORDER BY 4 DESC) LOOP
+    BEGIN
+      SELECT REC.SEGMENT_NAME AS TABLE_NAME,
+             DBMS_STATS.GET_PREFS(PNAME   => 'INCREMENTAL',
+                                  OWNNAME => 'EDBADM',
+                                  TABNAME => REC.SEGMENT_NAME)
+        INTO TABLE_NAME, IS_INCRESTATS
+        FROM DUAL;
+      -- 判断未开启增量统计的表
+      IF (IS_INCRESTATS = 'FALSE') THEN
+        -- 对未开启增量统计的表，设置自动开启
+        -- DBMS_STATS.SET_TABLE_PREFS('EDBADM',REC.SEGMENT_NAME,'INCREMENTAL','TRUE');
+        DBMS_OUTPUT.PUT_LINE(TABLE_NAME || ' : ' || IS_INCRESTATS);
+      END IF;
+    EXCEPTION
+      WHEN OTHERS THEN
+        DBMS_OUTPUT.PUT_LINE('Error:  ' || REC.SEGMENT_NAME || ' 开启增量统计失败');
+    END;
+  END LOOP;
+END;
+```
+
 #### 查看某张表统计信息是否过期
 
 ```sql
@@ -1152,7 +1192,6 @@ method_opt：
 ```sql
 -- 收集分区表的某个分区统计信息
 BEGIN
-  DBMS_STATS.FLUSH_DATABASE_MONITORING_INFO;
     DBMS_STATS.GATHER_TABLE_STATS(OWNNAME          => 'EDBADM',
                                   TABNAME          => 'LOTHISTORY',
                                   PARTNAME         => 'LOTHISTORY_202007',
@@ -2328,7 +2367,48 @@ MAP ggs_owner.emp_details, TARGET ggs_owner.emp_details, WHERE (location=”Sydn
 sqlexec “create index loc_ind on emp_details(location)”;
 ```
 
-#### 参考文档：https://www.cnblogs.com/quanweiru/p/4957633.html
+参考文档：https://www.cnblogs.com/quanweiru/p/4957633.html
+
+##### OGG 调用存储过程实例
+
+```sql
+-- REPLICAT 配置
+REPLICAT rep_oled
+SETENV (NLS_LANG=AMERICAN_AMERICA.AL32UTF8)
+SETENV (ORACLE_SID=mdwdb2)
+USERID goldengate,PASSWORD goldengate
+REPORTCOUNT EVERY 30 MINUTES, RATE
+REPERROR DEFAULT, ABEND
+GROUPTRANSOPS 1
+MAXTRANSOPS 1
+numfiles 5000
+HANDLECOLLISIONS
+assumetargetdefs
+DISCARDFILE ./dirrpt/rep_mdw.dsc, APPEND, MEGABYTES 1000
+ALLOWNOOPUPDATES
+map p1mesadm.BSOLEDDEFECTCODEDATA, target edbadm.EDS_BSOLEDDEFECTCODEDATA,&
+SQLEXEC (SPNAME edbadm.lookup_pt,&
+ID lookup_pt, &
+PARAMS (pt_code_param = eventtime))
+--COLMAP (USEDEFAULTS, EVENT_SHIFT_TIMEKEY = @GETVAL(lookup_pt.pt_desc_param)),&
+--filter(@getenv('transaction','csn')>13207699309811);
+COLMAP (USEDEFAULTS, EVENT_SHIFT_TIMEKEY = @GETVAL(lookup_pt.pt_desc_param));
+
+-- MDWDB 中调用存储过程转换SHIFT_TIMEKEY
+CREATE OR REPLACE PROCEDURE LOOKUP_PT(PT_CODE_PARAM IN DATE,
+                                      PT_DESC_PARAM OUT VARCHAR2) IS
+BEGIN
+  SELECT GET_SHIFT_TIMEKEY(TO_CHAR(PT_CODE_PARAM, 'yyyymmdd hh24miss'))
+    INTO PT_DESC_PARAM
+    FROM DUAL;
+END LOOKUP_PT;
+```
+
+参考文档：
+
+1. https://www.support.dbagenesis.com/post/golden-gate-replication-when-table-structure-is-different-colmap
+
+2. https://www.cnblogs.com/eastsea/p/4232303.html
 
 #### OGG 单向同步
 
