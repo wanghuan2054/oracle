@@ -25,10 +25,22 @@ sqlplus -v
 
 ```sql
 -- 当前数据库实例名查询 
-SELECT INSTANCE_NAME FROM V$INSTANCE; 
+-- 且ORACLE_SID必须与instance_name的值一致 ， ORACLD_SID用于与操作系统交互 ， instance_name是oracle数据库参数
+1. SELECT T."INSTANCE_NUMBER", T."INSTANCE_NAME", T."HOST_NAME", T."VERSION"
+  FROM V$INSTANCE T;
+  
+2. show parameter instance
 
 -- 数据库名查询
-SELECT NAME  FROM V$DATABASE; 
+1. SELECT NAME  FROM V$DATABASE; 
+2. show parameter db
+
+-- 查看数据库服务名 SERVICE_NAME（TNS中的SERVICE_NAME）
+1. SELECT VALUE AS SERVICE_NAME
+  FROM V$PARAMETER
+ WHERE NAME LIKE 'service_name%';
+ 
+2. show parameter service_name
 
 -- 当前数据库所有用户查询
 SELECT * FROM DBA_USERS;   
@@ -177,7 +189,7 @@ SQL>  show lines;
 linesize 500
 -- linesize的大小必须小于命令行可显示的大小，超过命令行的限制了，linesize当然不起作用
 
-SQL> set timing on;          //设置显示“已用时间：XXXX”
+SQL> set time on;          //设置显示“已用时间：XXXX”
 
 SQL> set autotrace on-;    //设置允许对执行的sql进行分析
 
@@ -1159,8 +1171,8 @@ DROP TABLESPACE EDS_EES_PAR_1704 ;
 -- 参考文档2 https://www.modb.pro/db/26653
 begin
  dbms_stats.gather_table_stats(ownname=>'EDBADM',
-                               tabname=>'LOTHISTORY',
-                               estimate_percent=>100,
+                               tabname=>'LOT',
+                               estimate_percent=>10,
                                method_opt=>'for all columns size repeat',
                                no_invalidate=>false,
                                degree=>4,
@@ -1185,22 +1197,69 @@ method_opt：
 */
 ```
 
-
-
-##### 按照分区收集统计信息
+##### 按照分区收集统计信息(推荐)
 
 ```sql
 -- 收集分区表的某个分区统计信息
 BEGIN
-    DBMS_STATS.GATHER_TABLE_STATS(OWNNAME          => 'EDBADM',
-                                  TABNAME          => 'LOTHISTORY',
-                                  PARTNAME         => 'LOTHISTORY_202007',
-                                  ESTIMATE_PERCENT => 100,
-                                  METHOD_OPT       => 'for all columns size repeat',
-                                  DEGREE           => 4,
-                                  GRANULARITY      => 'ALL',
-                                  CASCADE          => TRUE);
+        DBMS_STATS.GATHER_TABLE_STATS(OWNNAME          => 'EDBADM',
+                                      TABNAME          => 'EDS_EDC_BSPRODUCT_DATA_ITEM',
+                                      PARTNAME         => 'PD20210311',
+                                      ESTIMATE_PERCENT => 5,
+                                      METHOD_OPT       => 'for all indexed columns',
+                                      DEGREE           => 4,
+                                      GRANULARITY      => 'PARTITION',
+                                      CASCADE          => TRUE);
 END;
+
+granularity:（只和分区表相关）
+Granularity of statistics to collect ,only pertinent if the table is partitioned.
+granularity：数据分析的力度
+参数可选项： 
+GRANULARITY - The value determines granularity of statistics to collect (only pertinent if the table is partitioned).
+
+'ALL' - gathers all (subpartition, partition, and global) statistics
+
+'AUTO'- determines the granularity based on the partitioning type. This is the default value.
+
+'DEFAULT' - gathers global and partition-level statistics. This option is obsolete, and while currently supported, it is included in the documentation for legacy reasons only. You should use the 'GLOBAL AND PARTITION' for this functionality. Note that the default value is now 'AUTO'.
+
+'GLOBAL' - gathers global statistics
+
+'GLOBAL AND PARTITION' - gathers the global and partition level statistics. No subpartition level statistics are gathered even if it is a composite partitioned object.
+
+'PARTITION'- gathers partition-level statistics
+
+'SUBPARTITION' - gathers subpartition-level statistics.
+
+原文链接：https://blog.csdn.net/xiadingling/article/details/80401412
+  
+block_sapmple : 是否用块采样代替行采样.
+
+method_opt: 用于控制收集直方图策略。
+直方图简单来说就是数据库了解表中某列的数据分布，从而更正确的走更优的执行计划
+method_opt => ‘for all columns size 1’ 表示所有列都不收集直方图
+for all columns:统计所有列的histograms.
+for all indexed columns:统计所有indexed列的histograms.
+for all hidden columns:统计你看不到列的histograms
+for all columns <list> SIZE <N> | REPEAT | AUTO | SKEWONLY:
+         统计指定列的histograms.N的取值范围[1,254]; 
+         REPEAT上次统计过的histograms;
+         AUTO由oracle决定N的大小;
+         SKEWONLY multiple end-points with the same value which is what we define by "there is skew in the data"
+method_opt => ‘for all columns size skewonly’ 表示对表中所有列收集自动判断是否收集直方图。选择率非常高的列和null的列不会收集（谨慎使用）
+method_opt => ‘for all columns size auto’ 表示对出现在 where 条件中的列自动判断是否收集直方图。
+method_opt => ‘for all columns size repeat’ 表示当前有哪些列收集了直方图，现在就对哪些列收集直方图。
+在实际工作中，当系统趋于稳定之后，使用 REPEAT 方式收集直方图。
+
+no_invalidate ：表示共享池中涉及到该表的游标是否立即失效，默认值为 DBMS_STATS.AUTO_INVALIDATE，表示让 Oracle 自己决定是否立即失效。
+建议将 no_invalidate 参数设置为 FALSE，立即失效。因为发现有时候 SQL 执行缓慢是因为统计信息过期导致，重新收集了统计信息之后执行计划还是没有更改，原因就在于没有将这个参数设置为 false。
+
+degree： 表示收集统计信息的并行度，默认为 NULL。如果表没有设置 degree。如果表没有设置 degree，收集统计信息的时候后就不开并行；如果表设置了 degree，收集统计信息的时候就按照表的 degree 来开并行。可以查询 DBA_TABLES.degree 来查看表的 degree，一般情况下，表的 degree 都为 1。我们建议可以根据当时系统的负载、系统中 CPU 的个数以及表大小来综合判断设置并行度。
+
+cascade ：表示在收集表的统计信息的时候，是否级联收集索引的统计信息，默认值为DBMS_STATS.AUTO_CASCADE，表示让 Oracle 自己判断是否级联收集索引的统计信息。
+
+force:         即使表锁住了也收集统计信息
 ```
 
 按照索引收集统计信息
@@ -1953,6 +2012,40 @@ SELECT SQL_TEXT
  ORDER BY PIECE;
 ```
 
+#### 查看锁
+
+```sql
+-- 如何判断行锁 ， NOWAIT方式，如果有锁立刻返回错误 不等待
+SELECT *
+  FROM FGMSDMP.PRODUCTSHIPREQUEST P
+ WHERE P.SHIPREQUESTNAME = '0015014511'
+   FOR UPDATE NOWAIT;
+
+-- 如何判断表锁 ，NOWAIT方式，如果有锁立刻返回错误 不等待
+SELECT *
+  FROM FGMSDMP.PRODUCTSHIPREQUEST P
+   FOR UPDATE NOWAIT;
+
+-- SYS 用户查询，（有时候需要登录到对应的节点执行）
+SELECT C . OWNER,
+       C . OBJECT_NAME,
+       C . OBJECT_TYPE,
+       B . SID,
+       B . SERIAL#,
+       B . LOCKWAIT,
+       B . STATUS,
+       B . OSUSER,
+       B . MACHINE,
+       B . PROCESS,
+       B . PROGRAM
+  FROM V$LOCKED_OBJECT A, V$SESSION B, DBA_OBJECTS C
+ WHERE B . SID = A . SESSION_ID
+   AND A . OBJECT_ID = C . OBJECT_ID;
+   
+-- 根据查询到的SID 和 SERIAL# Kill
+ALTER SYSTEM KILL SESSION '354, 20425' ;
+```
+
 #### Session Kill
 
 ##### 正常手动kill session
@@ -2162,8 +2255,6 @@ SELECT *
  ORDER BY INSTANCE_NAME, SNAP_ID DESC;
 ```
 
-
-
 #### DBLink&同义词创建
 
 ```sql
@@ -2193,6 +2284,12 @@ create database link MWMS
   using '(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=XX.XX.XX.XX)(PORT=1521))
                                     (ADDRESS=(PROTOCOL=TCP)(HOST=XX.XX.XX.XX)(PORT=1521)))
 									(CONNECT_DATA=(SERVER=default)(SERVICE_NAME=fgmsdb)))';
+
+--删除DBLINK 
+DROP DATABASE LINK [name];   
+--或   
+DROP PUBLIC DATABASE LINK [name];  
+
 --创建dblink同义词
 create SYNONYM MATERIALPACKINGMWMS for T1WMSADM.MATERIALPACKING@T1WMSADM;
 
