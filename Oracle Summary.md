@@ -302,6 +302,12 @@ SELECT A.SEGMENT_NAME,
  ORDER BY 4 DESC;
 ```
 
+#### 修改表名
+
+```sql
+ALTER TABLE EDS_MES_EOH_BSMATERIAL_TEMP1 RENAME TO EDS_MES_EOH_BSMATERIAL;
+```
+
 ### **表空间**
 
 #### 查看默认表空间和临时表空间
@@ -1171,11 +1177,11 @@ DROP TABLESPACE EDS_EES_PAR_1704 ;
 -- 参考文档2 https://www.modb.pro/db/26653
 begin
  dbms_stats.gather_table_stats(ownname=>'EDBADM',
-                               tabname=>'LOT',
-                               estimate_percent=>10,
-                               method_opt=>'for all columns size repeat',
+                               tabname=>'EDS_EDC_BSPRODUCT_DATA_ITEM',
+                               estimate_percent=>1,
+                               method_opt=>'for all indexed columns',
                                no_invalidate=>false,
-                               degree=>4,
+                               degree=>6,
                                cascade=>true);
  end;
  /
@@ -3232,6 +3238,139 @@ GRANT READ,WRITE ON DIRECTORY DATAPUMP_DIR TO p1modadm;
 impdp p1modadm/adm2020 directory=DATAPUMP_DIR dumpfile=T1MODADM.dmp  LOGFILE=T1MODADM.log schemas=T1MODADM remap_schema=T1MODADM:P1MODADM remap_tablespace=T1MODADM_DAT:MOD_CUSTOMS_DAT,b12modmes:MOD_CUSTOMS_DAT,b4fabadm_dat:MOD_CUSTOMS_DAT,b4idm_dat:MOD_CUSTOMS_DAT,b6fabadm_dat:MOD_CUSTOMS_DAT,b6masterdata_dat:MOD_CUSTOMS_DAT,b6test01_dat:MOD_CUSTOMS_DAT,custom:MOD_CUSTOMS_DAT,d1mesadm_dat:MOD_CUSTOMS_DAT,d1modadm_dat:MOD_CUSTOMS_DAT,d1rtdadm_dat:MOD_CUSTOMS_DAT,d2mesadm_dat:MOD_CUSTOMS_DAT,goldengate:MOD_CUSTOMS_DAT,t1mesadm_dat:MOD_CUSTOMS_DAT,t1rtdadm_dat:MOD_CUSTOMS_DAT
 impdp SYSTEM/SYSTEM directory=DATAPUMP_DIR dumpfile=T1MODADM.dmp  LOGFILE=T1MODADM.log schemas=T1MODADM remap_schema=T1MODADM:P1MODADM remap_tablespace=T1MODADM_DAT:MOD_CUSTOMS_DAT,b12modmes:MOD_CUSTOMS_DAT,b4fabadm_dat:MOD_CUSTOMS_DAT,b4idm_dat:MOD_CUSTOMS_DAT,b6fabadm_dat:MOD_CUSTOMS_DAT,b6masterdata_dat:MOD_CUSTOMS_DAT,b6test01_dat:MOD_CUSTOMS_DAT,custom:MOD_CUSTOMS_DAT,d1mesadm_dat:MOD_CUSTOMS_DAT,d1modadm_dat:MOD_CUSTOMS_DAT,d1rtdadm_dat:MOD_CUSTOMS_DAT,d2mesadm_dat:MOD_CUSTOMS_DAT,goldengate:MOD_CUSTOMS_DAT,t1mesadm_dat:MOD_CUSTOMS_DAT,t1rtdadm_dat:MOD_CUSTOMS_DAT
 ```
+
+#### 普通表转分区表
+
+```sql
+-- 检查是否可以被重定义
+--通过调用CAN_REDEF_TABLE过程验证表是否能被在线重定义。如果表不能作为在线重定义表的候选表，那么这个过程提示一个错误，并且会表明为什么该表不-- 能在线重定义。
+BEGIN
+DBMS_REDEFINITION.CAN_REDEF_TABLE('edbadm','EDS_BSALARM_HIST');
+END;
+/ 
+
+create table EDS_BSALARM_HIST1
+(
+  site                VARCHAR2(40) not null,
+  shift_start_timekey VARCHAR2(15) not null,
+  alarm_id            VARCHAR2(200) not null,
+  alarm_type          VARCHAR2(40),
+  eqp_id              VARCHAR2(40),
+  unit_id             VARCHAR2(40),
+  product_id          VARCHAR2(40) not null,
+  product_type        VARCHAR2(40),
+  alarm_state         VARCHAR2(40),
+  alarm_severity      VARCHAR2(40),
+  alarm_text          VARCHAR2(4000),
+  event_name          VARCHAR2(40),
+  event_timekey       VARCHAR2(40) not null,
+  event_user          VARCHAR2(40),
+  alarm_action_code   VARCHAR2(200),
+  clear_user          VARCHAR2(40),
+  dcdata_id           VARCHAR2(40),
+  alarm_reason        VARCHAR2(2000),
+  user_measures       VARCHAR2(2000),
+  interface_time      DATE default SYSDATE
+)
+
+TABLESPACE EDS_EQP_TBS
+RESULT_CACHE (MODE DEFAULT)
+PCTUSED    0
+PCTFREE    10
+INITRANS   1
+MAXTRANS   255
+STORAGE    (
+            BUFFER_POOL      DEFAULT
+            FLASH_CACHE      DEFAULT
+            CELL_FLASH_CACHE DEFAULT
+           )
+PARTITION BY RANGE (SHIFT_START_TIMEKEY)
+(  
+  PARTITION PM201811 VALUES LESS THAN ('20181201 060000')
+    LOGGING
+    NOCOMPRESS 
+    TABLESPACE EDS_EQP_TBS
+    PCTFREE    10
+    INITRANS   1
+    MAXTRANS   255
+    STORAGE    (
+                BUFFER_POOL      DEFAULT
+                FLASH_CACHE      DEFAULT
+                CELL_FLASH_CACHE DEFAULT
+               ),  
+  PARTITION PM201812 VALUES LESS THAN ('20190101 060000')
+    LOGGING
+    NOCOMPRESS 
+    TABLESPACE EDS_EQP_TBS
+    PCTFREE    10
+    INITRANS   1
+    MAXTRANS   255
+    STORAGE    (
+                BUFFER_POOL      DEFAULT
+                FLASH_CACHE      DEFAULT
+                CELL_FLASH_CACHE DEFAULT
+               ),  
+  PARTITION PMMAX VALUES LESS THAN (MAXVALUE)
+    LOGGING
+    NOCOMPRESS 
+    TABLESPACE EDS_EQP_TBS
+    PCTFREE    10
+    INITRANS   1
+    MAXTRANS   255
+    STORAGE    (
+                BUFFER_POOL      DEFAULT
+                FLASH_CACHE      DEFAULT
+                CELL_FLASH_CACHE DEFAULT
+               )
+)
+NOCOMPRESS 
+NOCACHE
+NOPARALLEL
+MONITORING;
+
+
+EXEC DBMS_REDEFINITION.START_REDEF_TABLE('EDBADM', 'EDS_BSALARM_HIST', 'EDS_BSALARM_HIST1');
+
+
+如果表的数据很多，转换的时候可能会很长，这期间系统可能会继续对表EDS_BSALARM_HIST进行写入或者更新数据，那么可以执行以下的语句，这样在执行最后一步的时候可以避免长时间的锁定(该过程可选可不选)
+BEGIN 
+  DBMS_REDEFINITION.SYNC_INTERIM_TABLE('EDBADM', 'EDS_BSALARM_HIST', 'EDS_BSALARM_HIST1');
+END;
+/
+
+
+进行权限对象的迁移
+
+DECLARE
+num_errors PLS_INTEGER;
+BEGIN
+DBMS_REDEFINITION.COPY_TABLE_DEPENDENTS('EDBADM', 'EDS_MES_EOH_BSMATERIAL', 'EDS_MES_EOH_BSMATERIAL_TEMP',
+DBMS_REDEFINITION.CONS_ORIG_PARAMS, TRUE, TRUE, TRUE, TRUE, num_errors);
+END;
+/
+
+查询相关错误，在操作之前先检查，查询DBA_REDEFINITION_ERRORS试图查询错误：
+select object_name, base_table_name, ddl_txt from  DBA_REDEFINITION_ERRORS;
+
+
+结束整个重定义
+BEGIN
+DBMS_REDEFINITION.FINISH_REDEF_TABLE('EDBADM', 'EDS_BSALARM_HIST', 'EDS_BSALARM_HIST1');
+END;
+/
+
+
+另如果再执行的过程中发生错误，可以通过以下语句结束整个过程：
+BEGIN
+DBMS_REDEFINITION.ABORT_REDEF_TABLE(uname => 'SCOTT',
+orig_table => 'EMP',
+int_table => 'EMP_1'
+);
+END; 
+/
+```
+
+
 
 ## **数据治理**
 
