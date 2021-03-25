@@ -17,6 +17,10 @@ sqlplus -v
 -- 安装包版本：
 1、oracle解压包\client\install\oraparam.ini文件记录
 2、oracle解压包\welcome.html文件可以查看
+
+
+-- SQL 查询版本信息
+SELECT * FROM PRODUCT_COMPONENT_VERSION;
 ```
 
 
@@ -268,6 +272,372 @@ SELECT * FROM DBA_SYS_PRIVS;
 SELECT * FROM USER_SYS_PRIVS;
 ```
 
+## 分区
+
+#### 查询分区表是自动分区
+
+```sql
+-- 判断INTERVAL = 'YES'  , 也可以通过USER_PART_TABLES 判断
+SELECT T.TABLE_NAME,
+           T.PARTITION_NAME,
+           T.PARTITION_POSITION,
+           T.TABLESPACE_NAME,
+           T.INTERVAL
+      FROM USER_TAB_PARTITIONS T
+     WHERE T.INTERVAL = 'YES';
+```
+
+#### 查询分区表的分区列 
+
+##### 分区列
+
+```sql
+--显示分区列  显示数据库所有分区表的分区列信息：   
+select * from DBA_PART_KEY_COLUMNS  ;    
+--显示当前用户可访问的所有分区表的分区列信息：   
+select * from ALL_PART_KEY_COLUMNS ;     
+--显示当前用户所有分区表的分区列信息：  
+SELECT *
+   FROM USER_PART_KEY_COLUMNS T
+   WHERE T.NAME NOT LIKE 'BIN%'
+   AND T.OBJECT_TYPE = 'TABLE';
+```
+
+##### 子分区列
+
+```sql
+--显示当前用户所有分区表的子分区列信息
+SELECT * FROM USER_SUBPART_KEY_COLUMNS;
+
+--显示当前用户可访问的所有分区表的子分区列信息
+SELECT * FROM ALL_SUBPART_KEY_COLUMNS;
+
+--显示数据库所有分区表的子分区列信息
+SELECT * FROM DBA_SUBPART_KEY_COLUMNS;
+```
+
+#### 自动分区与普通范围分区转换
+
+```sql
+-- 设置自动分区为普通范围分区
+ALTER TABLE BOE_OEM_DEFECT SET INTERVAL();
+
+-- 设置普通分区为自动分区 ， 天分区
+ALTER TABLE T_TEST SET INTERVAL(NUMTODSINTERVAL(1,'day'));
+
+-- 设置月自动分区
+ALTER TABLE BOE_OEM_DEFECT SET INTERVAL(numtoyminterval(1,'month'));
+```
+
+#### 实时查询出有数据的分区
+
+```sql
+-- 实时查询出有数据的分区
+SELECT PARTITION_NAME
+  FROM USER_TAB_PARTITIONS
+ WHERE TABLE_NAME = 'LOTHISTORY'
+   AND SAMPLE_SIZE IS NOT NULL;
+```
+
+#### 查看指定分区数据 
+
+```sql
+/*查看分区表数据*/
+select * from LOTHISTORY partition(LOTHISTORY_201912)
+```
+
+#### 查看所有分区表
+
+```sql
+-- 查看当前用户
+SELECT T.TABLE_NAME,
+       T.PARTITIONING_TYPE,
+       T.SUBPARTITIONING_TYPE,
+       T.STATUS,
+       T.DEF_TABLESPACE_NAME,
+       T.INTERVAL
+  FROM USER_PART_TABLES T
+ WHERE T.TABLE_NAME NOT LIKE 'BIN%';
+ 
+--显示当前用户可访问的所有分区表信息: 
+select * from ALL_PART_TABLES;
+
+--显示数据库所有分区表的信息：  
+select * from DBA_PART_TABLES;
+```
+
+#### 查看分区表最大分区名
+
+```sql
+-- 查询当前所有的分区表最大分区名
+SELECT T.TABLE_NAME,
+       T.TABLESPACE_NAME,
+       T1.PARTITION_NAME,
+       T1.INTERVAL,
+       T1.HIGH_VALUE,
+       T.PARTITION_POSITION
+  FROM (SELECT T.TABLE_NAME,
+               T.TABLESPACE_NAME,
+               MAX(T.PARTITION_POSITION) AS PARTITION_POSITION
+          FROM USER_TAB_PARTITIONS T
+         WHERE T.TABLE_NAME NOT LIKE 'BIN%'
+         GROUP BY T.TABLE_NAME, T.TABLESPACE_NAME) T
+  LEFT JOIN USER_TAB_PARTITIONS T1
+    ON (T.TABLE_NAME = T1.TABLE_NAME AND
+       T.TABLESPACE_NAME = T1.TABLESPACE_NAME AND
+       T.PARTITION_POSITION = T1.PARTITION_POSITION)
+ ORDER BY T.TABLE_NAME
+ 
+ -- 分区最大值LONG 转换为VARCHAR 
+ SELECT T.TABLE_NAME,
+       T.TABLESPACE_NAME,
+       T1.PARTITION_NAME,
+       T1.INTERVAL,
+       LONG_2_VARCHAR(USER , T.TABLE_NAME ,T1.PARTITION_NAME ) HIGH_VALUE,
+       T.PARTITION_POSITION
+  FROM (SELECT T.TABLE_NAME,
+               T.TABLESPACE_NAME,
+               MAX(T.PARTITION_POSITION) AS PARTITION_POSITION
+          FROM USER_TAB_PARTITIONS T
+         WHERE T.TABLE_NAME NOT LIKE 'BIN%'
+         GROUP BY T.TABLE_NAME, T.TABLESPACE_NAME) T
+  LEFT JOIN USER_TAB_PARTITIONS T1
+    ON (T.TABLE_NAME = T1.TABLE_NAME AND
+       T.TABLESPACE_NAME = T1.TABLESPACE_NAME AND
+       T.PARTITION_POSITION = T1.PARTITION_POSITION)
+ ORDER BY T.TABLE_NAME;
+ 
+ -- LONG_2_VARCHAR
+ CREATE OR REPLACE FUNCTION LONG_2_VARCHAR(P_TABLE_OWNER    IN ALL_TAB_PARTITIONS.TABLE_OWNER%TYPE,
+                                          P_TABLE_NAME     IN ALL_TAB_PARTITIONS.TABLE_NAME%TYPE,
+                                          P_PARTITION_NAME IN ALL_TAB_PARTITIONS.PARTITION_NAME%TYPE)
+  RETURN VARCHAR2 AS
+  L_HIGH_VALUE LONG;
+BEGIN
+  SELECT HIGH_VALUE
+    INTO L_HIGH_VALUE
+    FROM ALL_TAB_PARTITIONS
+   WHERE TABLE_OWNER = P_TABLE_OWNER
+     AND TABLE_NAME = P_TABLE_NAME
+     AND PARTITION_NAME = P_PARTITION_NAME;
+
+  RETURN SUBSTR(L_HIGH_VALUE, 1, 4000);
+END;
+```
+
+#### 重命名表分区
+
+```sql
+-- 以下代码将P21更改为P2   
+ALTER TABLE LOTHISTORY RENAME PARTITION P21 TO P2; 
+ALTER TABLE BSERRORMESSAGELOG RENAME PARTITION P_MAX TO PMMAX; 
+```
+
+#### 添加分区
+
+```sql
+-- 添加分区
+ALTER TABLE BSERRORMESSAGELOG ADD  PARTITION P_MAX VALUES LESS THAN (MAXVALUE)
+    TABLESPACE MOD_CUSTOMS_DAT
+    PCTFREE 10
+    INITRANS 1
+    MAXTRANS 255
+    STORAGE
+    (
+      INITIAL 8M
+      NEXT 1M
+      MINEXTENTS 1
+      MAXEXTENTS UNLIMITED
+    );
+```
+
+#### 分区删除
+
+##### 重点
+
+```sql
+1. truncate分区
+alter table part_table truncate partition p1;	
+
+    全局索引：失效
+    分区索引：正常、没影响
+
+如何避免失效：
+alter table part_table truncate partition p1 update global indexes;	
+
+2. drop分区
+SQL操作命令：
+
+alter table part_table drop partition p1;	
+
+    全局索引：失效
+    分区索引：正常、没影响
+
+如何避免失效：
+
+alter table part_table drop partition p1 update global indexes;	 
+
+3. add分区
+SQL操作命令：
+
+alter table part_table add partition p5 values less than(37210);	 	
+
+    全局索引：正常、没影响
+    分区索引：正常、没影响
+
+4. split分区
+SQL操作命令：
+
+alter table part_table split partition p_max at(10086)  into (partition p6,partition p_max); 	 	
+
+    全局索引：失效
+    分区索引：如果max区中已经有记录了，这个时候split就会导致有记录的新增分区的局部索引失效。
+
+如何避免失效：
+
+    针对全局索引：
+
+alter table part_table split partition p_max at (10086) into (partition p6,partition p_max) update global indexes;	
+
+针对分区索引，需要重建局部索引：
+
+alter index idx_part_split_col1 rebuild; 
+
+-- 为避免全局和局部索引失效，简便写法是update indexes （包括global 和local）
+alter table part_table split partition p_max at (10086) into (partition p6,partition p_max) update indexes;	
+
+5. exchange分区
+SQL操作命令：
+
+alter table part_table exchange partition p1 with table normal_table including indexes;	 	
+
+    全局索引：失效
+    分区索引：正常、没影响
+
+如何避免失效：
+
+alter table part_table exchange partition p1 with table normal_table including indexes update global indexes;	 	 
+
+
+```
+
+ ![image.png](https://obs-emcsapp-public.obs.cn-north-4.myhwclouds.com:443/image%2Feditor%2Feb93882d-ab2e-4ff6-b01d-4eb8378c3e5c.png) 
+
+##### 正常删除
+
+```sql
+/*删除周分区*/
+alter table ALARMINTERFACETOPMS drop partition PM2005;
+alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200502;
+alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200503;
+alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200504;
+
+/*删除月分区*/
+alter table ALARMINTERFACETOPMS drop partition PM1902;
+```
+
+##### 调用存储过程删除
+
+```sql
+/*
+  PVVI_TABLE_NAME ： 表名
+  PVVI_START_PARTITION_NAME ： 开始分区名
+  PVVI_END_PARTITION_NAME：结束分区名
+*/
+-- 调用方式1 
+CALL DROP_PARTITION_BY_TABLE('CDS_MATERIALPACKING','PM201901','PM201905')
+
+-- 调用方式2 
+begin
+  -- Call the procedure
+  drop_partition_by_table(pvvi_table_name => 'CDS_MATERIALPACKING',
+                          pvvi_start_partition_name => 'PM201901',
+                          pvvi_end_partition_name => 'PM201905');
+end;
+
+-- DROP_PARTITION_BY_TABLE 源码
+CREATE OR REPLACE PROCEDURE DROP_PARTITION_BY_TABLE(PVVI_TABLE_NAME           IN VARCHAR2,
+                                                    PVVI_START_PARTITION_NAME IN VARCHAR2,
+                                                    PVVI_END_PARTITION_NAME   IN VARCHAR2) AS
+
+  --=================================================================================
+  --OBJECT NAME : DROP_PARTITION_BY_TABLE
+  --OBJECT TYPE : STORED PROCEDURE
+  --DESCRIPTION : DROP PARTITION BY TABLE
+  -- PVVI_TABLE_NAME  传入的表名
+  -- PVVI_START_PARTITION_NAME  传入要删除的开始分区名
+  -- PVVI_END_PARTITION_NAME    传入要删除的结束分区名
+  -- PVVO_RETURN_VALUE 返回值
+  --=================================================================================
+  --
+  --=================================================================================
+  --YYYY-MM-DD      DESCRIPTOR       DESCRIPTION
+  --2021-01-21      WANGHUAN        通过表名、删除介于开始分区和结束分区名之间的分区数据（包含开始结束分区数据）
+  --=================================================================================
+  --
+  --=================================================================================
+  --                               VARIALBLE DECLARATION
+  --=================================================================================
+  LVV_SQLEXEC VARCHAR2(200);
+  LVV_TABLE_NAME VARCHAR2(100);
+  LVV_START_PARTITION_NAME VARCHAR2(100);
+  LVV_END_PARTITION_NAME VARCHAR2(100);
+  V_CHOOSE_PARTITION_NAME VARCHAR2(100);
+
+  -- 表分区的游标定义 , 选择出介于PVVI_START_PARTITION_NAME 和 PVVI_END_PARTITION_NAME之间的所有分区名
+  CURSOR PARTITION_CURSOR IS
+    SELECT PARTITION_NAME
+           --,TABLE_NAME,
+           --TABLESPACE_NAME,
+           --A.BLOCKS * 8 / 1024 / 1024 GB,
+           --A.NUM_ROWS,
+           --A.LAST_ANALYZED
+      FROM USER_TAB_PARTITIONS A
+     WHERE TABLE_NAME = LVV_TABLE_NAME -- 'EDS_EDC_BSPRODUCT_DATA_ITEM'
+       AND A.PARTITION_NAME >= LVV_START_PARTITION_NAME -- 'PD20181116'
+       AND A.PARTITION_NAME <= LVV_END_PARTITION_NAME -- 'PD20181201'
+       GROUP BY PARTITION_NAME
+     ORDER BY A.PARTITION_NAME;
+
+  --=================================================================================
+  --                                 MAIN PROGRAM
+  --=================================================================================
+  --=============================================================
+  -- VARIABLE INITIALIZATION
+  --=============================================================
+BEGIN
+      -- 对传入参数的大小写做统一转换
+      LVV_TABLE_NAME := UPPER(PVVI_TABLE_NAME);
+      LVV_START_PARTITION_NAME := UPPER(PVVI_START_PARTITION_NAME);
+      LVV_END_PARTITION_NAME := UPPER(PVVI_END_PARTITION_NAME);
+    -- 设置DBMS打印输出缓冲区大小 字节数
+    DBMS_OUTPUT.ENABLE(1000000);
+    IF LVV_TABLE_NAME IS NULL THEN 
+        DBMS_OUTPUT.PUT_LINE('表名为空');
+        --PVVO_RETURN_VALUE := '表名为空' ;
+        RETURN ;
+    END IF ;
+    BEGIN
+        OPEN PARTITION_CURSOR;
+        LOOP
+          FETCH PARTITION_CURSOR
+            INTO V_CHOOSE_PARTITION_NAME;
+          EXIT WHEN PARTITION_CURSOR%NOTFOUND;
+            LVV_SQLEXEC := 'ALTER TABLE ' || LVV_TABLE_NAME || ' DROP PARTITION ' ||
+                         V_CHOOSE_PARTITION_NAME || ' UPDATE GLOBAL INDEXES';
+            DBMS_OUTPUT.PUT_LINE(LVV_SQLEXEC);
+            DBMS_UTILITY.EXEC_DDL_STATEMENT(LVV_SQLEXEC);
+        END LOOP;
+        --PVVO_RETURN_VALUE := '分区删除成功' ;
+        CLOSE PARTITION_CURSOR;
+     END;
+EXCEPTION
+  WHEN OTHERS THEN
+    --PVVO_RETURN_VALUE := '分区删除失败' ;
+    DBMS_OUTPUT.PUT_LINE('分区删除失败');
+END DROP_PARTITION_BY_TABLE;
+```
+
 ### **表**
 
 #### 获取表定义
@@ -302,13 +672,33 @@ SELECT A.SEGMENT_NAME,
  ORDER BY 4 DESC;
 ```
 
+#### 查看分区表的大小，按照PARTITION NAME 分组统计
+
+```sql
+SELECT A.SEGMENT_NAME,
+       A.TABLESPACE_NAME,
+       A.PARTITION_NAME ,
+       A.SEGMENT_TYPE,
+       SUM(A.BYTES) / 1024 / 1024 / 1024 AS "TOTAL(G)"
+  FROM DBA_SEGMENTS A
+ WHERE A.OWNER = 'EDBADM'
+   AND A.SEGMENT_TYPE LIKE '%TABLE%'
+   AND A.SEGMENT_NAME = 'DATACOLLECTRESULT'
+   AND A.SEGMENT_NAME NOT LIKE 'BIN%'
+   AND A.SEGMENT_NAME NOT LIKE 'SYS%'
+ GROUP BY A.SEGMENT_NAME, A.TABLESPACE_NAME, A.PARTITION_NAME , A.SEGMENT_TYPE
+ ORDER BY 4 DESC;
+```
+
+
+
 #### 修改表名
 
 ```sql
 ALTER TABLE EDS_MES_EOH_BSMATERIAL_TEMP1 RENAME TO EDS_MES_EOH_BSMATERIAL;
 ```
 
-### **表空间**
+####  **表空间**
 
 #### 查看默认表空间和临时表空间
 
@@ -325,7 +715,6 @@ SELECT PROPERTY_NAME, PROPERTY_VALUE
 ```sql
 -- 查看所有表空间
 SELECT T.*  FROM v$tablespace T;
-
 
 -- 查询所有表和索引的表空间
 WITH TAB_IDX_TBS AS 
@@ -586,13 +975,23 @@ SELECT TABLE_NAME, COLUMN_NAME, TABLESPACE_NAME
   FROM USER_LOBS
  WHERE TABLE_NAME = 'QAMESSAGELOG';
  
--- 对于含有lob字段的表，在建立时，oracle会自动为lob字段建立两个单独的segment,一个用来存放数据，另一个用来存放索引，
--- 并且它们都会存储在对应表指定的表空间中，而例1：只能移动非lob字段以外的数据，所以在对含有lob字段的表进行空间迁移，
+-- 对于含有lob字段的表，在建立时，oracle会自动为lob字段建立两个单独的segment,一个用来存放数据，另一个用来存放索引，并且它们都会存储在对应表指定的表空间中，当我们用alter table tb_name move tablespace tbs_name;对表做表空间之间迁移时只能迁移非lob字段以外的segment，而如果要在移动表数据同时移动lob相关字段，就必需用如下的含有特殊参数据的文句来完成：
+
+alter table tb_name move tablespace tbs_name lob (column_lob1,column_lob2) store as(tablespace tbs_name);
 -- 需要使用如下语句：
 -- 例3：alter table tb_name move tablespace tbs_name lob (col_lob1,col_lob2) store as(tablesapce tbs_name);
+-- 表包含lob字段，需要收回空间，首先move表，move表，move完表后lob的空间并不会释放，还需要针对lob字段进行move。
 
-ALTER TABLE QAMESSAGELOG MOVE LOB(MESSAGELOG) STORE AS (TABLESPACE MOD_RUNTIME_DAT);
-ALTER TABLE BSERRORMESSAGELOG MOVE LOB(MESSAGE) STORE AS (TABLESPACE MOD_RUNTIME_DAT);
+--非分区表lob的move： 
+alter table  T_SEND_LOG move tablespace lob(MESSAGE) store as (tablespace DATALOB); 
+ALTER TABLE QAMESSAGELOG MOVE tablespace LOB(MESSAGELOG) STORE AS (TABLESPACE MOD_RUNTIME_DAT);
+
+-- 分区表lob的move： 
+alter table  QAMESSAGELOG move  partition p2018 lob(MESSAGE) store as (tablespace DATALOB); 
+
+ALTER TABLE BSERRORMESSAGELOG MOVE tablespace LOB(MESSAGE) STORE AS (TABLESPACE MOD_RUNTIME_DAT);
+
+--注意：move表后记得rebuild索引。
 ```
 
 
@@ -1291,200 +1690,6 @@ exec dbms_stats.gather_schema_stats(ownname=>'CS',estimate_percent=>10,degree=>8
 exec dbms_stats.gather_database_stats(estimate_percent=>10,degree=>8,cascade=>true,granularity=>'ALL');  
 ```
 
-#### 分区删除
-
-##### 重点
-
-```sql
-1. truncate分区
-alter table part_table truncate partition p1;	
-
-    全局索引：失效
-    分区索引：正常、没影响
-
-如何避免失效：
-alter table part_table truncate partition p1 update global indexes;	
-
-2. drop分区
-SQL操作命令：
-
-alter table part_table drop partition p1;	
-
-    全局索引：失效
-    分区索引：正常、没影响
-
-如何避免失效：
-
-alter table part_table drop partition p1 update global indexes;	 
-
-3. add分区
-SQL操作命令：
-
-alter table part_table add partition p5 values less than(37210);	 	
-
-    全局索引：正常、没影响
-    分区索引：正常、没影响
-
-4. split分区
-SQL操作命令：
-
-alter table part_table split partition p_max at(10086)  into (partition p6,partition p_max); 	 	
-
-    全局索引：失效
-    分区索引：如果max区中已经有记录了，这个时候split就会导致有记录的新增分区的局部索引失效。
-
-如何避免失效：
-
-    针对全局索引：
-
-alter table part_table split partition p_max at (10086) into (partition p6,partition p_max) update global indexes;	
-
-    针对分区索引，需要重建局部索引：
-
-alter index idx_part_split_col1 rebuild; 
-	 
-
-5. exchange分区
-SQL操作命令：
-
-alter table part_table exchange partition p1 with table normal_table including indexes;	 	
-
-    全局索引：失效
-    分区索引：正常、没影响
-
-如何避免失效：
-
-alter table part_table exchange partition p1 with table normal_table including indexes update global indexes;	 	 
-
-
-```
-
- ![image.png](https://obs-emcsapp-public.obs.cn-north-4.myhwclouds.com:443/image%2Feditor%2Feb93882d-ab2e-4ff6-b01d-4eb8378c3e5c.png) 
-
-##### 正常删除
-
-```sql
-/*删除周分区*/
-alter table ALARMINTERFACETOPMS drop partition PM2005;
-alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200502;
-alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200503;
-alter table BSGLASSOUTUNITORSUBUNIT drop partition PW200504;
-
-/*删除月分区*/
-alter table ALARMINTERFACETOPMS drop partition PM1902;
-```
-
-##### 调用存储过程删除
-
-```sql
-/*
-  PVVI_TABLE_NAME ： 表名
-  PVVI_START_PARTITION_NAME ： 开始分区名
-  PVVI_END_PARTITION_NAME：结束分区名
-*/
--- 调用方式1 
-CALL DROP_PARTITION_BY_TABLE('CDS_MATERIALPACKING','PM201901','PM201905')
-
--- 调用方式2 
-begin
-  -- Call the procedure
-  drop_partition_by_table(pvvi_table_name => 'CDS_MATERIALPACKING',
-                          pvvi_start_partition_name => 'PM201901',
-                          pvvi_end_partition_name => 'PM201905');
-end;
-
--- DROP_PARTITION_BY_TABLE 源码
-CREATE OR REPLACE PROCEDURE DROP_PARTITION_BY_TABLE(PVVI_TABLE_NAME           IN VARCHAR2,
-                                                    PVVI_START_PARTITION_NAME IN VARCHAR2,
-                                                    PVVI_END_PARTITION_NAME   IN VARCHAR2) AS
-
-  --=================================================================================
-  --OBJECT NAME : DROP_PARTITION_BY_TABLE
-  --OBJECT TYPE : STORED PROCEDURE
-  --DESCRIPTION : DROP PARTITION BY TABLE
-  -- PVVI_TABLE_NAME  传入的表名
-  -- PVVI_START_PARTITION_NAME  传入要删除的开始分区名
-  -- PVVI_END_PARTITION_NAME    传入要删除的结束分区名
-  -- PVVO_RETURN_VALUE 返回值
-  --=================================================================================
-  --
-  --=================================================================================
-  --YYYY-MM-DD      DESCRIPTOR       DESCRIPTION
-  --2021-01-21      WANGHUAN        通过表名、删除介于开始分区和结束分区名之间的分区数据（包含开始结束分区数据）
-  --=================================================================================
-  --
-  --=================================================================================
-  --                               VARIALBLE DECLARATION
-  --=================================================================================
-  LVV_SQLEXEC VARCHAR2(200);
-  LVV_TABLE_NAME VARCHAR2(100);
-  LVV_START_PARTITION_NAME VARCHAR2(100);
-  LVV_END_PARTITION_NAME VARCHAR2(100);
-  V_CHOOSE_PARTITION_NAME VARCHAR2(100);
-
-  -- 表分区的游标定义 , 选择出介于PVVI_START_PARTITION_NAME 和 PVVI_END_PARTITION_NAME之间的所有分区名
-  CURSOR PARTITION_CURSOR IS
-    SELECT PARTITION_NAME
-           --,TABLE_NAME,
-           --TABLESPACE_NAME,
-           --A.BLOCKS * 8 / 1024 / 1024 GB,
-           --A.NUM_ROWS,
-           --A.LAST_ANALYZED
-      FROM USER_TAB_PARTITIONS A
-     WHERE TABLE_NAME = LVV_TABLE_NAME -- 'EDS_EDC_BSPRODUCT_DATA_ITEM'
-       AND A.PARTITION_NAME >= LVV_START_PARTITION_NAME -- 'PD20181116'
-       AND A.PARTITION_NAME <= LVV_END_PARTITION_NAME -- 'PD20181201'
-       GROUP BY PARTITION_NAME
-     ORDER BY A.PARTITION_NAME;
-
-  --=================================================================================
-  --                                 MAIN PROGRAM
-  --=================================================================================
-  --=============================================================
-  -- VARIABLE INITIALIZATION
-  --=============================================================
-BEGIN
-      -- 对传入参数的大小写做统一转换
-      LVV_TABLE_NAME := UPPER(PVVI_TABLE_NAME);
-      LVV_START_PARTITION_NAME := UPPER(PVVI_START_PARTITION_NAME);
-      LVV_END_PARTITION_NAME := UPPER(PVVI_END_PARTITION_NAME);
-    -- 设置DBMS打印输出缓冲区大小 字节数
-    DBMS_OUTPUT.ENABLE(1000000);
-    IF LVV_TABLE_NAME IS NULL THEN 
-        DBMS_OUTPUT.PUT_LINE('表名为空');
-        --PVVO_RETURN_VALUE := '表名为空' ;
-        RETURN ;
-    END IF ;
-    BEGIN
-        OPEN PARTITION_CURSOR;
-        LOOP
-          FETCH PARTITION_CURSOR
-            INTO V_CHOOSE_PARTITION_NAME;
-          EXIT WHEN PARTITION_CURSOR%NOTFOUND;
-            LVV_SQLEXEC := 'ALTER TABLE ' || LVV_TABLE_NAME || ' DROP PARTITION ' ||
-                         V_CHOOSE_PARTITION_NAME;
-            DBMS_OUTPUT.PUT_LINE(LVV_SQLEXEC);
-            DBMS_UTILITY.EXEC_DDL_STATEMENT(LVV_SQLEXEC);
-        END LOOP;
-        --PVVO_RETURN_VALUE := '分区删除成功' ;
-        CLOSE PARTITION_CURSOR;
-     END;
-EXCEPTION
-  WHEN OTHERS THEN
-    --PVVO_RETURN_VALUE := '分区删除失败' ;
-    DBMS_OUTPUT.PUT_LINE('分区删除失败');
-END DROP_PARTITION_BY_TABLE;
-```
-
-
-
-#### 查看指定分区数据 
-
-```sql
-/*查看分区表数据*/
-select * from LOTHISTORY partition(LOTHISTORY_201912)
-```
-
 ### **索引**
 
 #### **创建函数索引**
@@ -1798,11 +2003,35 @@ Current log sequence           210816
 -- rman 登录
 $ rman target /
 
+-- 查看当前RMAN参数， 包括archive 保存天数
+$ show all;
+RMAN configuration parameters for database with db_unique_name MDWDB are:
+CONFIGURE RETENTION POLICY TO REDUNDANCY 2; -- 保留天数
+CONFIGURE BACKUP OPTIMIZATION OFF; # default
+CONFIGURE DEFAULT DEVICE TYPE TO 'SBT_TAPE';
+CONFIGURE CONTROLFILE AUTOBACKUP ON;
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE DISK TO '%F';
+CONFIGURE CONTROLFILE AUTOBACKUP FORMAT FOR DEVICE TYPE SBT_TAPE TO '%F'; # default
+CONFIGURE DEVICE TYPE DISK PARALLELISM 4 BACKUP TYPE TO BACKUPSET;
+CONFIGURE DEVICE TYPE SBT_TAPE PARALLELISM 1 BACKUP TYPE TO BACKUPSET; # default
+CONFIGURE DATAFILE BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE DATAFILE BACKUP COPIES FOR DEVICE TYPE SBT_TAPE TO 1; # default
+CONFIGURE ARCHIVELOG BACKUP COPIES FOR DEVICE TYPE DISK TO 1; # default
+CONFIGURE ARCHIVELOG BACKUP COPIES FOR DEVICE TYPE SBT_TAPE TO 1; # default
+CONFIGURE CHANNEL DEVICE TYPE DISK FORMAT   '/db_backup/mdwdb/%U' MAXPIECESIZE 1024 M;
+CONFIGURE MAXSETSIZE TO UNLIMITED; # default
+CONFIGURE ENCRYPTION FOR DATABASE OFF; # default
+CONFIGURE ENCRYPTION ALGORITHM 'AES128'; # default
+CONFIGURE COMPRESSION ALGORITHM 'BASIC' AS OF RELEASE 'DEFAULT' OPTIMIZE FOR LOAD TRUE ; # default
+CONFIGURE ARCHIVELOG DELETION POLICY TO NONE; # default
+CONFIGURE SNAPSHOT CONTROLFILE NAME TO '+MDWDBDATA/MDWDB/snapcf_mdwdb1.f';
+CONFIGURE SNAPSHOT CONTROLFILE NAME TO '+MDWDBDATA/mdwdb/snapcf_mdwdb1.f';
+
 -- 检查一些无用的archivelog
 RMAN> crosscheck archivelog all;
 
 -- 删除过期的归档
-RMAN> delete expired archivelog all;
+RMAN> delete noprompt expired archivelog all;
 
 -- 删除截止到前一天的所有归档
 delete archivelog until time 'sysdate-1' ; 
@@ -1811,13 +2040,31 @@ delete archivelog until time 'sysdate-1' ;
 delete archivelog until time 'sysdate';
 
 -- rman 删除归档 （“1”对应是一天，若想删除6小时前的归档日志，则改为0.25）
-RMAN> delete archivelog all completed before 'sysdate-1'; 
+RMAN> delete noprompt  archivelog all completed before 'sysdate-1'; 
 
 -- 删除完归档，若有对应的备份策略需要重新启动全备。
 
+-- 查看废弃的文件
+RMAN> REPORT OBSOLETE
+-- 删除废弃的文件
+RMAN> DELETE OBSOLETE
+
+备份管理器RMAN提供了CONFIGURE RETENTION POLICY命令设置备份保存策略，即设置备份文件保留多长时间。RMAN会将超出时间的备份文件标识为废弃（obsolete）。命令REPORT OBSOLETE和DELETE OBSOLETE分别用来查看废弃的文件和删除废弃的文件。RMAN跟踪备份的数据文件、控制文件、归档日志文件，并确定哪些需要保存，哪些需要标记为废弃。但RMAN不自动删除废弃的备份文件。
+定义备份保留策略有以下两种方式：
+
+1.使用CONFIGURE RETENTION POLICY TO RECOVERY WINDOW命令。
+
+
+例如：RMAN>CONFIGURE RETENTION POLICY TO RECOVERY WINDOW OF 5 DAYS;
+
+我现在的时间是6月11日16:42，如果我设置了上述备份保留策略并进行备份，则该备份在6月16日16:42之后会被标识为废弃。
+
+2.使用CONFIGURE RETENTION POLICY REDUNDANCY命令。
+
+ 例如：RMAN>CONFIGURE RETENTION POLICY REDUNDANCY 3;
+
+ 如果进行了上述设置，当完成三次备份后，在做完第四次备份的时候，第一次备份结果将被标识为废弃。ORACLE11G默认的备份保留策略是用该方法设置的，且REDUNDANCY为1。可以使用命令CONFIGURE RETENTION POLICY CLEAR恢复策略为默认值。还可以用命令CONFIGURE RETENTION POLICY TO NONE进行策略设置，此时REPORT OBSOLETE和DELETE OBSOLETE将不把任何备份文件视为废弃。
 ```
-
-
 
 #### 查看ARCHIVED LOG Free Space
 
@@ -3422,6 +3669,24 @@ ALTER TABLE DIM_DATA_GOVERNANCE_CONFIG
 
 
 SELECT T.* FROM DIM_DATA_GOVERNANCE_CONFIG T;
+
+-- 创建触发器， 只要对该配置表进行insert 和 update ，即更新时间
+CREATE OR REPLACE TRIGGER TRIG_DDGC_AUTO_UPDATE_TIME
+BEFORE  INSERT OR UPDATE
+   ON DIM_DATA_GOVERNANCE_CONFIG
+   REFERENCING OLD AS OLD NEW AS NEW
+FOR EACH ROW
+BEGIN
+  SELECT SYSDATE INTO :NEW.LAST_UPDATED FROM DUAL;
+END;
+
+   
+-- 查询触发器
+SELECT * FROM ALL_SOURCE WHERE TYPE='TRIGGER' AND NAME='TRIG_DDGC_AUTO_UPDATE_TIME';
+
+
+-- 删除触发器
+DROP TRIGGER TRIG_DDGC_AUTO_UPDATE_TIME
 ```
 
 #### 表结构释义
@@ -3496,5 +3761,16 @@ alter PACKAGE BODY FLOW_GETOPERATIONSEQLIST compile;
 alter PACKAGE BODY GETSPCLIST compile;
 alter PACKAGE BODY MATERIAL_GETWIPLIST compile;
 alter PROCEDURE PR_ERPINF_LG01 compile;
+```
+
+###  ORA-14758
+
+ Last partition in the range section cannot be dropped 
+
+```sql
+-- 自动分区
+-- 也就是说，人工创建的分区P1是间隔分区中的最高分区，是自动产生其它分区的参照，故不能删除，当然，如果手工创建多个分区的话，最后一个手工分区是不可删除的，其它则可以删除
+
+参考文档：https://blog.csdn.net/Alen_Liu_SZ/article/details/103152572
 ```
 
