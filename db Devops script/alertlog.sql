@@ -1,0 +1,2 @@
+
+host copy /Y D:\APP\ORACLE\diag\rdbms\mdwetl\mdwetl\trace\alert_mdwetl.log .\                                                                                                                                                                                                                                                                                                                                   

@@ -77,6 +77,9 @@ conn edbadm/XXXXX
 ### **oracle服务启动停止**
 
 ```plsql
+alter system checkpoint
+
+
 -- 关闭数据库实例
 shutdown immediate
 Oracle shutdown顺序 : 一般使用
@@ -276,6 +279,54 @@ SELECT * FROM DBA_SYS_PRIVS;
 -- 查看当前用户登录的权限
 SELECT * FROM USER_SYS_PRIVS;
 ```
+
+### 查看生成AWR进程
+
+```shell
+$ ps -ef | grep mmnl
+    grid  3614     1  0  Sep 16  ?        215:58 asm_mmnl_+ASM2
+  oracle  2484     1  0  Sep 23  ?        529:02 ora_mmnl_mdwdb2
+  oracle 16212 13667  0 09:40:49 pts/0     0:00 grep mmnl
+```
+
+###  重启mmon和mmnl进程 
+
+```sql
+SQL> alter system enable restricted session;
+System altered.
+SQL> alter system disable restricted session;
+System altered.
+查看alert日志可以看到mmon和mmnl进程已经重启了
+```
+
+### 查看DB cursors 数和使用率
+
+```sql
+SELECT 'session_cached_cursors' PARAMETER,
+       LPAD(VALUE, 5) VALUE,
+       USED,
+       DECODE(VALUE, 0, 'n/a', TO_CHAR(100 * USED / VALUE, '990') || '%') USAGE
+  FROM (SELECT MAX(S.VALUE) USED
+          FROM V$STATNAME N, V$SESSTAT S
+         WHERE N.NAME = 'session cursor cache count'
+           AND S.STATISTIC# = N.STATISTIC#),
+       (SELECT VALUE FROM V$PARAMETER WHERE NAME = 'session_cached_cursors')
+UNION ALL
+SELECT 'open_cursors',
+       LPAD(VALUE, 5),
+       USED,
+       TO_CHAR(100 * USED / VALUE, '990') || '%'
+  FROM (SELECT MAX(SUM(S.VALUE)) USED
+          FROM V$STATNAME N, V$SESSTAT S
+         WHERE N.NAME IN
+               ('opened cursors current', 'session cursor cache count')
+           AND S.STATISTIC# = N.STATISTIC#
+         GROUP BY S.SID),
+       (SELECT VALUE FROM V$PARAMETER WHERE NAME = 'open_cursors');
+
+```
+
+
 
 ## 分区
 
@@ -1061,7 +1112,7 @@ ALTER TABLE BSERRORMESSAGELOG MOVE tablespace LOB(MESSAGE) STORE AS (TABLESPACE 
 -- 对空间不足表空间进行扩容：
 -- 方法一：
 ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA/mdwdb/eds_edc_tbs114.dbf' SIZE 10G AUTOEXTEND ON NEXT 100M MAXSIZE UNLIMITED;
--- 方法二 数据库自己管理文件方式
+-- 方法二 数据库自己管理文件方式 , 建议初始化1G
 ALTER TABLESPACE EDS_OGG_TBS ADD DATAFILE '+MDWDBDATA' SIZE 20G AUTOEXTEND ON; 
 
 -- 创建临时表空间 
@@ -2695,7 +2746,45 @@ SELECT SPID FROM V$PROCESS WHERE ADDR = 'C000000FE0DAA480';
 KILL - 9 SPID;
 ```
 
-调用存储过程批量kill session（有bug ，待完善）
+##### SQL拼接ALTER KILL SESSION 
+
+```sql
+-- where 添加过滤条件，选择指定session kill
+SELECT A.MACHINE MACHINE,
+       A.USERNAME USERNAME,
+       A.SID || ',' || A.SERIAL# SID,
+       'alter system kill session ' || '''' || A.SID || ',' || A.SERIAL# || '''' ||
+       ' IMMEDIATE;' AS EXEC_SQL,
+       C.SPID OSPID,
+       SUBSTR(A.PROGRAM, 1, 19) PROGRAM,
+       A.EVENT EVENT,
+       B.SQL_ID || ',' || B.CHILD_NUMBER SQLID,
+       --       B.PLAN_HASH_VALUE                                                     PLAN_HASH_VALUE,
+       B.EXECUTIONS EXECS,
+       (B.ELAPSED_TIME / DECODE(NVL(B.EXECUTIONS, 0), 0, 1, B.EXECUTIONS)) /
+       1000000 AVG_ETIME,
+       ROUND((B.BUFFER_GETS /
+             DECODE(NVL(B.EXECUTIONS, 0), 0, 1, B.EXECUTIONS)),
+             2) AVG_LIOS,
+       A.BLOCKING_SESSION BLOCK_SS,
+       SW.STATE STATE,
+       SW.WAIT_TIME WAIT_TIME
+  FROM V$SESSION A, V$SESSION_WAIT SW, V$SQL B, V$PROCESS C
+ WHERE DECODE(A.SQL_ID, NULL, A.PREV_SQL_ID, A.SQL_ID) = B.SQL_ID
+   AND DECODE(A.SQL_ID, NULL, A.PREV_CHILD_NUMBER, A.SQL_CHILD_NUMBER) =
+       B.CHILD_NUMBER
+      --A.SQL_ID           = B.SQL_ID AND   A.SQL_CHILD_NUMBER = B.CHILD_NUMBER
+   AND A.SID = SW.SID
+   AND A.PADDR = C.ADDR
+   AND A.STATUS = 'ACTIVE'
+   AND A.USERNAME IS NOT NULL
+   AND A.WAIT_CLASS <> 'Idle'
+   AND B.SQL_TEXT NOT LIKE '%v$sql%'
+   AND A.SID <> USERENV('SID')
+ ORDER BY B.SQL_ID, B.PLAN_HASH_VALUE;
+```
+
+##### 调用存储过程批量kill session（有bug ，待完善）
 
 ```sql
 -- 批量杀死 latch: cache buffers chains事件导致的session
@@ -2750,6 +2839,28 @@ select * from table(dbms_xplan.display_awr('4xa8fp75b0s3h'));
 
 
 #### AWR收集
+
+##### 简介
+
+```shell
+# Oracle提供的脚本均位于下列目录下
+
+$ORACLE_HOME/rdbms/admin
+# awrsqrpt.sql用来分析某条指定的SQL语句，通过awrsqrpt.sql脚本，awr能够生成指定曾经执行过的SQL的执行计划，当时消耗的资源等情况。
+
+常用的几个如下：
+
+awrrpt.sql ：生成指定快照区间的统计报表
+awrrpti.sql ：生成指定数据库实例，并且指定快照区间的统计报表
+awrsqlrpt.sql ：生成指定快照区间，指定SQL语句(实际指定的是该语句的SQLID)的统计报表
+awrsqrpi.sql ：生成指定数据库实例，指定快照区间的指定SQL语句的统计报表
+awrddrpt.sql ：指定两个不同的时间周期，生成这两个周期的统计对比报表
+awrddrpi.sql ：指定数据库实例，并指定两个的不同时间周期，生成这两个周期的统计对比报表
+addmrpt.sql：数据库自动诊断监视工具（Automatic Database Diagnostic Monitor :ADDM）
+addmrpti.sql：指定数据库实例，数据库自动诊断监视工具（Automatic Database Diagnostic Monitor :ADDM）
+```
+
+
 
 ```sql
 -- windows server 收集方式
@@ -2854,6 +2965,70 @@ Enter value for report_name: /tmp/awrrpt_2_65327_65328.html
 
 html默认下载路径为/tmp/awrrpt_2_65327_65328.html (awr报告存放路径可以指定)
 ```
+
+##### 查看最近的top 10 SNAPSHOT
+
+```sql
+ SELECT *
+   FROM (SELECT SNAP_ID, END_INTERVAL_TIME, INSTANCE_NUMBER
+           FROM DBA_HIST_SNAPSHOT
+          WHERE INSTANCE_NUMBER = 3
+          ORDER BY SNAP_ID DESC)
+  WHERE ROWNUM < = 10;
+```
+
+##### 手动创建或删除snapshot
+
+```sql
+1. 创建snapshot
+-- DBMS_WORKLOAD_REPOSITORY.CREATE_SNAPSHOT()
+SQL> exec dbms_workload_repository.create_snapshot(); 
+
+-- 然后可以通过 DBA_HIST_SNAPSHOT 视图查看刚刚创建的Snapshots信息。 
+SELECT * FROM DBA_HIST_SNAPSHOT; 
+
+-- 2手动删除Snapshots 
+--删除Snapshots是使用DBMS_WORKLOAD_REPOSITORY包的另一个过程DROP_SNAPSHOT_RANGE 该过程在执行时可以通过指定snap_id的范围的方式一次删除多个Snapshot 
+--例如 
+select count(0) from dba_hist_snapshot where snap_id between 6770 and 6774; 
+
+2. 删除snapshot
+select max(snap_id) from dba_hist_snapshot; 
+select dbid from v$database; 
+exec dbms_workload_repository.drop_snapshot_range(low_snap_id => 6770,high_snap_id => 6774,dbid => 4059638244); 
+--或者 
+begin 
+dbms_workload_repository.drop_snapshot_range( 
+low_snap_id => 6770, 
+high_snap_id => 6774, 
+dbid => 4059638244); 
+end; 
+
+select count(0) from dba_hist_snapshot where snap_id between 6770 and 6774;
+```
+
+##### ASH收集
+
+```sql
+-- 收集实时的AWR报告
+SQL> @?/rdbms/admin/ashrpt.sql
+```
+
+##### 针对指定SQL_ID 生产AWR
+
+```sql
+-- awrsqrpt.sql用来分析某条指定的SQL语句，通过awrsqrpt.sql脚本，awr能够生成指定曾经执行过的SQL的执行计划，当时消耗的资源等情况。
+SQL> @?/rdbms/admin/awrsqlrpt.sql
+```
+
+##### AWR 对比报告
+
+```sql
+-- awrddrpt.sql ：指定两个不同的时间周期，生成这两个周期的统计对比报表
+SQL> @?/rdbms/admin/awrddrpt.sql
+```
+
+
 
 ####  DB Time
 
@@ -4079,9 +4254,18 @@ DISABLED : 是否启用该表的自动管理方式。 启用Y ， 不启用N
 DESCRIPTION：其他备注描述内容   
 ```
 
+#### 批量生产Partition 分区
 
-
-
+```sql
+SELECT 'PARTITION  PM' ||
+       TO_CHAR(ADD_MONTHS(TO_DATE('201401', 'YYYYMM'), ROWNUM - 1),'YYYYMM') ||
+       ' VALUES LESS THAN (' || '''' ||
+        TO_CHAR(ADD_MONTHS(TO_DATE('201401', 'YYYYMM'), ROWNUM), 'YYYYMM') 
+        ||'01 060000'  || ''')' || '    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,'
+  FROM DUAL
+CONNECT BY ROWNUM <= MONTHS_BETWEEN(TO_DATE('202104', 'yyyymm'),
+                          TO_DATE('201401', 'yyyymm')) + 1;
+```
 
 
 
