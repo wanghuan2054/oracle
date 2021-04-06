@@ -1571,6 +1571,7 @@ SELECT T.OWNER,
    --AND T.TABLE_NAME = 'BSGLASSOUTUNITORSUBUNIT'
    AND T.STALE_STATS = 'YES'
    AND t.TABLE_NAME NOT LIKE 'BIN%'
+   AND t.TABLE_NAME NOT LIKE '%$%'
    AND t.OBJECT_TYPE = 'PARTITION'
    AND T.LAST_ANALYZED IS NOT NULL
  ORDER BY T.TABLE_NAME , T.PARTITION_NAME;
@@ -2729,6 +2730,49 @@ SELECT C . OWNER,
 ALTER SYSTEM KILL SESSION '354, 20425' ;
 ```
 
+#### 查看最近最消耗CPU的SQL语句及会话信息
+
+##### 查看近1分钟内最消耗CPU的SQL
+
+```sql
+SELECT ASH.INST_ID,
+        ASH.SQL_ID,
+        (SELECT VS.SQL_TEXT
+           FROM GV$SQLAREA VS
+          WHERE VS.SQL_ID = ASH.SQL_ID
+            AND ASH.INST_ID = VS.INST_ID) SQL_TEXT,
+        ASH.SQL_CHILD_NUMBER,
+        ASH.SQL_OPNAME,
+        ASH.SESSION_INFO,
+        COUNTS,
+        PCTLOAD * 100 || '%' PCTLOAD
+   FROM (SELECT ASH.INST_ID,
+                ASH.SQL_ID,
+                ASH.SQL_CHILD_NUMBER,
+                ASH.SQL_OPNAME,
+                (ASH.MODULE || '--' || ASH.ACTION || '--' || ASH.PROGRAM || '--' ||
+                ASH.MACHINE || '--' || ASH.CLIENT_ID || '--' ||
+                ASH.SESSION_TYPE) SESSION_INFO,
+                COUNT(*) COUNTS,
+                ROUND(COUNT(*) / SUM(COUNT(*)) OVER(), 2) PCTLOAD,
+                DENSE_RANK() OVER(ORDER BY COUNT(*) DESC) RANK_ORDER
+           FROM GV$ACTIVE_SESSION_HISTORY ASH
+          WHERE  ASH.SESSION_TYPE <> 'BACKGROUND'
+           AND ASH.SESSION_STATE = 'ON CPU'
+AND SAMPLE_TIME > SYSDATE - 10 / (24 * 60)
+          GROUP BY ASH.INST_ID,
+                   ASH.SQL_ID,
+                   ASH.SQL_CHILD_NUMBER,
+                   ASH.SQL_OPNAME,
+                   (ASH.MODULE || '--' || ASH.ACTION || '--' || ASH.PROGRAM || '--' ||
+                   ASH.MACHINE || '--' || ASH.CLIENT_ID || '--' ||
+                   ASH.SESSION_TYPE)) ASH
+  WHERE RANK_ORDER <= 10
+  ORDER BY COUNTS DESC;
+```
+
+
+
 #### Session Kill
 
 ##### 正常手动kill session
@@ -3125,6 +3169,106 @@ Notes:如果DBLINK访问的表属于DBLINK用户，则不需要创建同义词�
 ```sql
 SELECT * FROM ALL_DB_LINKS;
 ```
+
+#### 非分区表在线转分区表
+
+```sql
+1. 查看表是否支持重定义 
+BEGIN
+DBMS_REDEFINITION.CAN_REDEF_TABLE('edbadm','EDS_BSALARM');
+END;
+/ 
+2. 创建于源表结构一致的EDS_BSALARM_TEMP
+-- Create table
+create table EDS_BSALARM_TEMP
+(
+  site                 VARCHAR2(40) not null,
+  create_shift_timekey VARCHAR2(40) not null,
+  alarm_id             VARCHAR2(200) not null,
+  alarm_type           VARCHAR2(40),
+  eqp_id               VARCHAR2(40),
+  unit_id              VARCHAR2(40),
+  product_id           VARCHAR2(40) not null,
+  product_type         VARCHAR2(40),
+  alarm_state          VARCHAR2(40),
+  alarm_severity       VARCHAR2(40),
+  alarm_text           VARCHAR2(4000),
+  last_event_name      VARCHAR2(40),
+  last_event_timekey   VARCHAR2(40) not null,
+  last_event_user      VARCHAR2(40),
+  alarm_action_code    VARCHAR2(200),
+  clear_user           VARCHAR2(40),
+  dcdata_id            VARCHAR2(40),
+  alarm_reason         VARCHAR2(2000),
+  user_measures        VARCHAR2(2000),
+  interface_time       DATE default SYSDATE
+)
+PARTITION BY RANGE (create_shift_timekey)
+(  
+  PARTITION  PM202010 VALUES LESS THAN ('20201101 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202011 VALUES LESS THAN ('20201201 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202012 VALUES LESS THAN ('20210101 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202101 VALUES LESS THAN ('20210201 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202102 VALUES LESS THAN ('20210301 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202103 VALUES LESS THAN ('20210401 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202104 VALUES LESS THAN ('20210501 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PM202105 VALUES LESS THAN ('20210601 060000')    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS,
+  PARTITION  PMMAX VALUES LESS THAN (MAXVALUE)    LOGGING NOCOMPRESS  TABLESPACE EDS_COM_TBS
+)
+NOCOMPRESS 
+NOCACHE
+MONITORING;
+-- Create/Recreate primary, unique and foreign key constraints 
+alter table EDS_BSALARM_TEMP
+  add constraint EDS_BSALARM_TEMP_PK primary key (SITE, CREATE_SHIFT_TIMEKEY, ALARM_ID, PRODUCT_ID, LAST_EVENT_TIMEKEY)
+  using index 
+  tablespace EDS_COM_IDX_TBS;
+-- Grant/Revoke object privileges 
+grant select, insert, update, delete on EDS_BSALARM_TEMP to EDBETL;
+
+
+3. 开始重定义表
+EXEC DBMS_REDEFINITION.START_REDEF_TABLE('EDBADM', 'EDS_BSALARM', 'EDS_BSALARM_TEMP');
+
+
+-- 如果表的数据很多，转换的时候可能会很长，这期间系统可能会继续对表EDS_BSALARM_HIST进行写入或者更新数据，那么可以执行以下的语句，这样在执行最后一步的时候可以避免长时间的锁定(该过程可选可不选)
+BEGIN 
+  DBMS_REDEFINITION.SYNC_INTERIM_TABLE('EDBADM', 'EDS_BSALARM', 'EDS_BSALARM_TEMP');
+END;
+/
+
+
+4. 进行权限对象的迁移
+DECLARE
+num_errors PLS_INTEGER;
+BEGIN
+DBMS_REDEFINITION.COPY_TABLE_DEPENDENTS('EDBADM','EDS_BSALARM', 'EDS_BSALARM_TEMP',
+DBMS_REDEFINITION.CONS_ORIG_PARAMS, TRUE, TRUE, TRUE, TRUE, num_errors);
+END;
+/
+
+5. 查询相关错误，在操作之前先检查，查询DBA_REDEFINITION_ERRORS试图查询错误：
+select object_name, base_table_name, ddl_txt from  DBA_REDEFINITION_ERRORS;
+
+
+6. 结束整个重定义
+BEGIN
+DBMS_REDEFINITION.FINISH_REDEF_TABLE('EDBADM', 'EDS_BSALARM', 'EDS_BSALARM_TEMP');
+END;
+/
+
+
+7. 另如果再执行的过程中发生错误，可以通过以下语句结束整个过程：
+BEGIN
+DBMS_REDEFINITION.ABORT_REDEF_TABLE(uname => 'SCOTT',
+orig_table => 'EDS_BSALARM',
+int_table => 'EDS_BSALARM_TEMP'
+);
+END; 
+/
+```
+
+
 
 #### 大表创建索引
 
@@ -4254,7 +4398,7 @@ DISABLED : 是否启用该表的自动管理方式。 启用Y ， 不启用N
 DESCRIPTION：其他备注描述内容   
 ```
 
-#### 批量生产Partition 分区
+#### 批量生成Partition 分区
 
 ```sql
 SELECT 'PARTITION  PM' ||

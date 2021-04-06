@@ -242,6 +242,7 @@ $ find /home/oracle/daycheck/log -name '*.log'  -mtime +30  | xargs rm -rf
 
 ```shell
 # rac 集群下， 需要在root用户下执行， 需要清除oracle  和  grid 用户的数据
+  # rac 集群下，可能 LSNRCTL 读写日志关闭存在一点问题root不能正常调用，但是应该不影响listerner log清理
 # 非rac 集群下，oracle 用户创建调度任务即可，清除oracle用户的数据
 # 每天中午12：30 
 [unixtst:oracle:/home/oracle/cmd] crontab -e
