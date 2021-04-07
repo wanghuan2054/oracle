@@ -2094,7 +2094,19 @@ SELECT TRUNC(COMPLETION_TIME), SUM(MB) / 1024 DAY_GB
                TRUNC(SYSDATE) )
  GROUP BY TRUNC(COMPLETION_TIME)
  ORDER BY 1 DESC;
+
+--列出全部归档文件
+ list archivelog all;    
 ```
+
+#### 查看归档磁盘路径
+
+```sql
+SELECT T."PATH", T."NAME", T."STATE" FROM V$ASM_DISK T 
+WHERE t."NAME" LIKE 'MDWDBARCH%' ;
+```
+
+
 
 #### 查看ARCHIVED LOG 模式
 
@@ -2107,6 +2119,34 @@ Oldest online log sequence     210813
 Next log sequence to archive   210816
 Current log sequence           210816
 ```
+
+#### 查看ONLINE归档
+
+```sql
+SELECT * FROM V$LOG;
+
+SELECT T.*  FROM v$archived_log T  ;
+
+SELECT T."SEQUENCE#"  FROM v$archived_log T  ;
+```
+
+
+
+#### 查看归档空间大小
+
+```sql
+SQL> show parameter db_recovery
+
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+db_recovery_file_dest                string
+db_recovery_file_dest_size           big integer 1000G
+
+-- 查看每个磁盘组的Total和Free大小
+SELECT NAME,STATE,TYPE,TOTAL_MB,FREE_MB FROM V$ASM_DISKGROUP; 
+```
+
+
 
 #### RMAN
 
@@ -2176,6 +2216,66 @@ RMAN> DELETE OBSOLETE
 
  如果进行了上述设置，当完成三次备份后，在做完第四次备份的时候，第一次备份结果将被标识为废弃。ORACLE11G默认的备份保留策略是用该方法设置的，且REDUNDANCY为1。可以使用命令CONFIGURE RETENTION POLICY CLEAR恢复策略为默认值。还可以用命令CONFIGURE RETENTION POLICY TO NONE进行策略设置，此时REPORT OBSOLETE和DELETE OBSOLETE将不把任何备份文件视为废弃。
 ```
+
+##### RMAN恢复dbf
+
+```sql
+-- RMAN 归档恢复脚本
+run {
+ allocate channel 'dev_0' type 'sbt_tape' 
+ parms 'SBT_LIBRARY=/opt/omni/lib/libob2oracle8_64bit.so,ENV=(OB2BARTYPE=Oracle8,OB2APPNAME=mesdb1,TAG=TAG20210407T074519)';
+ restore archivelog from logseq 93677 until logseq  93678 thread 2;
+}
+
+
+RMAN> run {
+2> allocate channel 'dev_0' type 'sbt_tape' 
+3>  parms 'SBT_LIBRARY=/opt/omni/lib/libob2oracle8_64bit.so,ENV=(OB2BARTYPE=Oracle8,OB2APPNAME=mesdb1,TAG=TAG20210407T074519)';
+4>  restore archivelog from logseq 93677 until logseq  93678 thread 2;
+5>  }
+
+allocated channel: dev_0
+channel dev_0: SID=586 instance=mesdb1 device type=SBT_TAPE
+channel dev_0: Data Protector A.07.00/103
+
+Starting restore at 07-APR-21
+
+channel dev_0: starting archived log restore to default destination
+channel dev_0: restoring archived log
+archived log thread=2 sequence=93677
+channel dev_0: restoring archived log
+archived log thread=2 sequence=93678
+channel dev_0: reading from backup piece fabdb_mesdb_Arch_backup_1<mesdb1_41495:1069228123:1>.dbf
+channel dev_0: piece handle=fabdb_mesdb_Arch_backup_1<mesdb1_41495:1069228123:1>.dbf tag=TAG20210407T074519
+channel dev_0: restored backup piece 1
+channel dev_0: restore complete, elapsed time: 00:04:46
+Finished restore at 07-APR-21
+released channel: dev_0
+
+
+
+-- 查询指定序列号之间的归档备份
+RMAN> list backup of archivelog from logseq 93677 until logseq 93678 thread 2;
+
+
+List of Backup Sets
+===================
+
+
+BS Key  Size       Device Type Elapsed Time Completion Time
+------- ---------- ----------- ------------ ---------------
+41399   26.55G     SBT_TAPE    00:02:07     07-APR-21      
+        BP Key: 41795   Status: AVAILABLE  Compressed: NO  Tag: TAG20210407T074519
+        Handle: fabdb_mesdb_Arch_backup_1<mesdb1_41495:1069228123:1>.dbf   Media: 0a780863:5ba476ad:637b:0001
+
+  List of Archived Logs in backup set 41399
+  Thrd Seq     Low SCN    Low Time  Next SCN   Next Time
+  ---- ------- ---------- --------- ---------- ---------
+  2    93677   13319368923973 07-APR-21 13319371558061 07-APR-21
+  2    93678   13319371558061 07-APR-21 13319371672787 07-APR-21
+```
+
+
 
 #### 查看ARCHIVED LOG Free Space
 
@@ -3601,6 +3701,7 @@ select username,account_status from dba_users where account_status='OPEN';
 $ cd /oracle/ogg
 $ ./ggsci
 
+export ORACLE_SID=mesdb2
 -- 使用 goldengate用户连接
 dblogin USERID goldengate,PASSWORD goldengate
 -- sqlplus 段可以使用conn 连接到goldengate用户
@@ -4477,5 +4578,16 @@ alter PROCEDURE PR_ERPINF_LG01 compile;
 -- 也就是说，人工创建的分区P1是间隔分区中的最高分区，是自动产生其它分区的参照，故不能删除，当然，如果手工创建多个分区的话，最后一个手工分区是不可删除的，其它则可以删除
 
 参考文档：https://blog.csdn.net/Alen_Liu_SZ/article/details/103152572
+```
+
+### OGG-00446的解决方法
+
+```sql
+-- 原因是extract 所需的archived log已经被清走，不在log_archive_dest指定的目录下，解决方法很简单，只要把sequence 从10770开始到当前的archived log重新拷贝回log_archive_dest目录下即可
+
+https://blog.csdn.net/huoshuyinhua/article/details/53923966
+
+-- OGG 源表添加字段， 目标表如何跟进
+https://blog.csdn.net/heroicpoem/article/details/107189181?utm_medium=distribute.pc_relevant.none-task-blog-2~default~BlogCommendFromBaidu~default-5.control&dist_request_id=&depth_1-utm_source=distribute.pc_relevant.none-task-blog-2~default~BlogCommendFromBaidu~default-5.control
 ```
 
