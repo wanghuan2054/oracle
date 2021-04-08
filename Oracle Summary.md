@@ -729,6 +729,361 @@ EXCEPTION
 END DROP_PARTITION_BY_TABLE;
 ```
 
+## 执行计划
+
+### 要点
+
+1. 表的连接顺序：已正确的顺序连接各表以便尽早尽多的消除数据
+2. 需要查看每个对象返回的row
+3. 列的基数大小
+4. 分区裁剪
+5. 使用正确的联结类型
+6. 访问方法
+7. 每一步执行的资源消耗和成本
+
+### DBMS_XPLAN.DISPLAY 
+
+```sql
+-- 与SQL PLUS中F5效果一样， 是预估的执行计划
+SQL> conn edbadm/edbadm
+Connected.
+SQL> set lines 999 pages 999
+SQL> explain plan for select count(*) from lot;
+
+Explained.
+
+SQL> select * from table(dbms_xplan.display);
+
+PLAN_TABLE_OUTPUT
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Plan hash value: 2661993950
+
+------------------------------------------------------------------------
+| Id  | Operation             | Name   | Rows  | Cost (%CPU)| Time     |
+------------------------------------------------------------------------
+|   0 | SELECT STATEMENT      |        |     1 |   334   (1)| 00:00:05 |
+|   1 |  SORT AGGREGATE       |        |     1 |            |          |
+|   2 |   INDEX FAST FULL SCAN| LOT_PK |   192K|   334   (1)| 00:00:05 |
+------------------------------------------------------------------------
+
+9 rows selected.
+```
+
+### SET AUTOTRACE
+
+#### AUTOTRACE ON (包含执行计划和统计信息)
+
+```sql
+SQL> show autot
+autotrace OFF
+SQL> set autot on
+SQL> show autot
+autotrace ON EXPLAIN STATISTICS
+SQL> SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  2    FROM LOT T
+  3   WHERE ROWNUM = 1;
+
+LOTNAME                                  PRODUCTIONTYPE                           PRODUCTSPECNAME
+---------------------------------------- ---------------------------------------- ----------------------------------------
+6QY4114105                               Production                               B6P065WB5LP01-T
+
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 1112242415
+
+---------------------------------------------------------------------------
+| Id  | Operation          | Name | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |      |     1 |    38 |     2   (0)| 00:00:01 |
+|*  1 |  COUNT STOPKEY     |      |       |       |            |          |
+|   2 |   TABLE ACCESS FULL| LOT  |     1 |    38 |     2   (0)| 00:00:01 |
+---------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM=1)
+
+
+Statistics
+----------------------------------------------------------
+          0  recursive calls
+          0  db block gets
+          3  consistent gets
+          0  physical reads
+          0  redo size
+        713  bytes sent via SQL*Net to client
+        524  bytes received via SQL*Net from client
+          2  SQL*Net roundtrips to/from client
+          0  sorts (memory)
+          0  sorts (disk)
+          1  rows processed
+```
+
+#### set autot traceonly
+
+```sql
+SQL> SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  2    FROM LOT T
+  3   WHERE ROWNUM = 1;
+
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 1112242415
+
+---------------------------------------------------------------------------
+| Id  | Operation          | Name | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |      |     1 |    38 |     2   (0)| 00:00:01 |
+|*  1 |  COUNT STOPKEY     |      |       |       |            |          |
+|   2 |   TABLE ACCESS FULL| LOT  |     1 |    38 |     2   (0)| 00:00:01 |
+---------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM=1)
+
+
+Statistics
+----------------------------------------------------------
+          0  recursive calls
+          0  db block gets
+          3  consistent gets
+          0  physical reads
+          0  redo size
+        713  bytes sent via SQL*Net to client
+        524  bytes received via SQL*Net from client
+          2  SQL*Net roundtrips to/from client
+          0  sorts (memory)
+          0  sorts (disk)
+          1  rows processed
+```
+
+#### set autot traceonly explain (只输出执行计划不输出统计信息，不真实执行)
+
+```sql
+SQL> set autot traceonly explain
+SQL> show autot
+autotrace TRACEONLY EXPLAIN
+SQL> SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  2    FROM LOT T
+  3   WHERE ROWNUM = 1;
+
+Execution Plan
+----------------------------------------------------------
+Plan hash value: 1112242415
+
+---------------------------------------------------------------------------
+| Id  | Operation          | Name | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |      |     1 |    38 |     2   (0)| 00:00:01 |
+|*  1 |  COUNT STOPKEY     |      |       |       |            |          |
+|   2 |   TABLE ACCESS FULL| LOT  |     1 |    38 |     2   (0)| 00:00:01 |
+---------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM=1)
+```
+
+#### set autot traceonly STATISTICS(只输出统计信息)
+
+```sql
+SQL>  set autot traceonly STATISTICS
+SQL> show autot
+autotrace TRACEONLY STATISTICS
+SQL> SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  2    FROM LOT T
+  3   WHERE ROWNUM = 1;
+
+
+Statistics
+----------------------------------------------------------
+          0  recursive calls
+          0  db block gets
+          3  consistent gets
+          0  physical reads
+          0  redo size
+        713  bytes sent via SQL*Net to client
+        524  bytes received via SQL*Net from client
+          2  SQL*Net roundtrips to/from client
+          0  sorts (memory)
+          0  sorts (disk)
+          1  rows processed
+```
+
+
+
+### DBMS_XPLAN.DISPLAY_AWR/CURSOR
+
+```sql
+-- 真实的执行计划
+-- 执行SQL
+SQL>   SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  2      FROM LOT T
+  3     WHERE ROWNUM = 1;
+
+LOTNAME                                  PRODUCTIONTYPE                           PRODUCTSPECNAME
+---------------------------------------- ---------------------------------------- ----------------------------------------
+6QY4114105                               Production                               B6P065WB5LP01-T
+
+-- 根据 SQL TEXT查询SQL_ID
+SQL> SELECT T."SQL_ID", T."SQL_TEXT"
+  2    FROM V$SQL T
+  3   WHERE t."SQL_TEXT" LIKE
+  4         'SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAM%';
+
+SQL_ID    SQL_TEXT
+-------------
+cdfx0fa2b8xbn
+SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME   FROM LOT T  WHERE ROWNUM = 1
+
+
+-- 查看执行计划(真实计划)
+SQL>  select * from table(dbms_xplan.display_cursor('cdfx0fa2b8xbn'));
+
+PLAN_TABLE_OUTPUT
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+SQL_ID  cdfx0fa2b8xbn, child number 0
+-------------------------------------
+SELECT T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME   FROM LOT T
+WHERE ROWNUM = 1
+
+Plan hash value: 1112242415
+
+---------------------------------------------------------------------------
+| Id  | Operation          | Name | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |      |       |       |     2 (100)|          |
+|*  1 |  COUNT STOPKEY     |      |       |       |            |          |
+|   2 |   TABLE ACCESS FULL| LOT  |     1 |    38 |     2   (0)| 00:00:01 |
+---------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM=1)
+```
+
+#### gather_plan_statistics
+
+```sql
+-- 收集真实的资源消耗
+SELECT /*+ gather_plan_statistics */
+ T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  FROM LOT T
+ WHERE ROWNUM = 1;
+
+-- 根据 SQL TEXT查询SQL_ID
+SELECT T."SQL_ID", T."SQL_TEXT"
+  FROM V$SQL T
+ WHERE t."SQL_TEXT" LIKE
+       '%SELECT /*+ gather_plan_statistics */ T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME%';
+
+                         
+SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR('g73pkay90j0s0',0,'allstats last'));
+```
+
+####  MONITOR
+
+```sql
+-- sql monitor使用，必须在sql中使用/* +MONITOR*/ Hint，然后数据会存在v$sql_monitor表里
+-- 随意找条sql，注意要加/*+ moniotr*/
+
+sql monitor 捕捉sql的前提：
+
+并行执行的sql语句
+单次执行消耗的CPU或IO超过5秒
+statistics_level级别必须是TYPICAL 或者ALL
+使用/* +MONITOR*/ HINT的SQL语句
+
+SQL Monitor 参数设置
+STATISTICS_LEVEL必须设置为：‘TYPICAL’（缺省）或者 ‘ALL’
+CONTROL_MANAGEMENT_PACK_ACCESS设置为：‘DIAGNOSTIC+TUNING’
+查看statistics_level参数
+show parameter statistics_level;
+建议还是改变Session就可以
+alter session set statistics_level=ALL;
+
+查看参数CONTROL_MANAGEMENT_PACK_ACCESS
+
+show parameter CONTROL_MANAGEMENT_PACK_ACCESS;
+
+SQL Monitor Report
+本博客采用DBMS_SQLTUNE包DBMS_SQLTUNE.report_sql_monitor的方式获取，报告格式有：‘TEXT’，‘HTML’，‘XML’ ，‘ACTIVE’，其中’ACTIVE’只在11g R2以后才支持
+
+-- 收集真实的资源消耗
+SELECT /*+ monitor */
+ T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME
+  FROM LOT T
+ WHERE ROWNUM = 1;
+
+-- 根据 SQL TEXT查询SQL_ID
+SELECT T."SQL_ID", T."SQL_TEXT"
+  FROM V$SQL T
+ WHERE t."SQL_TEXT" LIKE
+       '%SELECT /*+ monitor */ T.LOTNAME, T.PRODUCTIONTYPE, T.PRODUCTSPECNAME%';
+
+SELECT DBMS_SQLTUNE.REPORT_SQL_MONITOR(
+  SQL_ID => '8f81kyjd9m8y0',
+  TYPE => 'TEXT',
+  REPORT_LEVEL => 'ALL') AS REPORT
+FROM dual;
+
+```
+
+##### SQL Monitor Report查询
+
+```sql
+-- 查看所有的sql monitor report
+ select dbms_sqltune.report_sql_monitor from dual;
+ 
+--查看某个sql的sql monitor report
+  SELECT DBMS_SQLTUNE.report_sql_monitor(sql_id => '2rjh5d5k2yujz', type => 'TEXT') from dual;
+  
+-- 查看某个sql的整体性能
+  SELECT DBMS_SQLTUNE.report_sql_monitor_list(sql_id=>'2rjh5d5k2yujz',type =>'TEXT',report_level => 'ALL') AS report FROM dual;
+  
+ -- 查看整个系统的性能
+  SELECT DBMS_SQLTUNE.report_sql_monitor_list(type =>'TEXT',report_level => 'ALL') AS report FROM dual;
+```
+
+
+
+## SQL优化思路
+
+1、找到执行计划瓶颈
+
+2、调整执行计划
+
+3、获取更合适的执行计划
+
+4、执行计划绑定
+
+### 与表连接相关的执行计划
+
+```sql
+嵌套循环连接(Nest Loop Join)
+Nested Loops：每读一条驱动表的数据，就根据连接条件去被驱动表中查找对应的数据，直到读完驱动表所有数据为止。
+一般用于驱动表小，被驱动表较大，且关联字段有索引的情况。
+
+哈希连接(Hash Join)
+Hash Join：首先在内存根据连接条件生成一张hash表，然后再去扫描被驱动表，并将每行与hash表对比，找到所有匹配的行。
+一般用于两个大表关联、查询小表大部分数据、相同数量级的表关联。
+
+排序合并连接(Merge Join)
+Sort Merge Join：将两个表的数据分别全部读取出来并排序，然后再根据连接条件合并。
+
+
+Cartesian Join：两个表没有where条件，应用中应当避免笛卡尔积。
+```
+
+
+
 ### **表**
 
 #### 获取表定义
@@ -1895,8 +2250,6 @@ SELECT T.*
   FROM EDS_EQP_RUN_HIST T
  WHERE T.EVENT_SHIFT_TIMEKEY = '20201112 060000'
 -- PARTITION RANGE ALL对分区字段查询时，使用函数不会走分区索引，会扫描所有分区
-
-
 
 -- 创建全局索引，且索引分区键和表分区键相同
 CREATE INDEX ORDERS_GLOBAL_1_IDX ON ORDERS(ORD_DATE) GLOBAL
@@ -3368,6 +3721,127 @@ END;
 /
 ```
 
+#### Archive Log 如何扩容
+
+```shell
+# 切换root
+# 扫描当前挂的盘
+mdwdb1#[/dev/rdisk] ioscan -fnNkC disk
+Class     I  H/W Path  Driver S/W State   H/W Type     Description
+===================================================================
+disk      3  64000/0xfa00/0x1   esdisk   CLAIMED     DEVICE       HP      LOGICAL VOLUME
+                      /dev/disk/disk3      /dev/disk/disk3_p2   /dev/rdisk/disk3     /dev/rdisk/disk3_p2
+                      /dev/disk/disk3_p1   /dev/disk/disk3_p3   /dev/rdisk/disk3_p1  /dev/rdisk/disk3_p3
+disk    2250  64000/0xfa00/0x1a  esdisk   CLAIMED     DEVICE       3PARdataVV
+                      /dev/disk/disk2250   /dev/rdisk/disk2250
+disk    2201  64000/0xfa00/0x6c  esdisk   CLAIMED     DEVICE       3PARdataVV
+                      /dev/disk/disk2201   /dev/rdisk/disk2201
+disk    2202  64000/0xfa00/0x6d  esdisk   CLAIMED     DEVICE       3PARdataVV
+
+# 查看新挂的盘
+mdwdb1#[/dev/rdisk]ls -l /dev/rdisk/disk2250
+crw-r-----   1 grid       asmadmin    13 0x00001a Apr  7 16:00 /dev/rdisk/disk2250
+
+# 赋权限
+mdwdb1#[/dev/rdisk] chmod 660 /dev/rdisk/disk2250
+# 查看权限是否授予成功
+mdwdb1#[/dev/rdisk] ls -l /dev/rdisk/disk2250ls -l /dev/rdisk/disk2250
+crw-rw----   1 grid       asmadmin    13 0x00001a Apr  7 16:00 /dev/rdisk/disk2250
+
+# 切换grid用户
+mdwdb1#[/dev/rdisk]su - grid
+# sysasm用户登录sql plus
+
+# asmcmd 查询当前归档空间名字  MDWDBARCH
+$ asmcmd
+ASMCMD> lsdg
+State    Type    Rebal  Sector  Block       AU  Total_MB  Free_MB  Req_mir_free_MB  Usable_file_MB  Offline_disks  Voting_files  Name
+MOUNTED  EXTERN  N        1024   4096  1048576   2072576  1746886                0         1746886              0             N  MDWDBARCH/
+MOUNTED  EXTERN  N        1024   4096  1048576    102400    69364                0           69364              0             N  MDWDBCTL1/
+MOUNTED  EXTERN  N        1024   4096  1048576    102400    69364                0           69364              0             N  MDWDBCTL2/
+MOUNTED  EXTERN  N        1024   4096  1048576  37748736  1269965                0         1269965              0             N  MDWDBDATA/
+MOUNTED  EXTERN  N        1024   4096  1048576      5120     4608                0            4608              0             Y  VOTINT/
+
+$ sqlplus / as sysasm
+# 查看ASM 参数
+SQL> show parameter name
+
+NAME                                 TYPE        VALUE
+------------------------------------ ----------- ------------------------------
+db_unique_name                       string      +ASM
+instance_name                        string      +ASM1
+lock_name_space                      string
+service_names                        string      +ASM
+
+# 查看当前asm挂的磁盘
+SQL> select path from v$asm_disk;
+
+PATH
+--------------------------------------------------------------------------------
+/dev/rdisk/disk2234
+/dev/rdisk/disk2239
+/dev/rdisk/disk2235
+/dev/rdisk/disk2236
+/dev/rdisk/disk2237
+/dev/rdisk/disk2238
+/dev/rdisk/disk2240
+/dev/rdisk/disk2241
+/dev/rdisk/disk2242
+/dev/rdisk/disk2243
+/dev/rdisk/disk2250
+
+# 挂载新加的磁盘给MDWDBARCH
+SQL> alter diskgroup MDWDBARCH add disk '/dev/rdisk/disk2250';
+
+# 查看挂载是否成功
+SQL> col diskname for a30;
+SQL> col failgroup for a30;
+SQL> col state for a20;
+SQL> col path for a30;
+SQL> col diskgroup for a20;
+SQL> set linesize 999;
+SQL>
+SELECT B.NAME          AS DISKGROUP,
+       B.STATE         AS DISKGROUPSTAT,
+       A.NAME          AS DISKNAME,
+       A.FAILGROUP,
+       B.TYPE,
+       A.PATH,
+       A.HEADER_STATUS,
+       A.MOUNT_STATUS,
+       A.STATE
+  FROM V$ASM_DISK A, V$ASM_DISKGROUP B
+ WHERE A.GROUP_NUMBER = B.GROUP_NUMBER;
+ 
+set lines 200 pages 999
+col path for a22 
+col disk# for 999
+col name for a13
+col failgroup for a13
+
+ SQL>
+ SELECT GROUP_NUMBER  GROUP#,
+       DISK_NUMBER   DISK#,
+       NAME,
+       OS_MB,
+       TOTAL_MB,
+       FREE_MB,
+       STATE,
+       PATH,
+       HEADER_STATUS,
+       VOTING_FILE,
+       REDUNDANCY,
+       FAILGROUP
+  FROM V$ASM_DISK
+ ORDER BY 1, 2;
+
+# 查询ASM 磁盘reblance状态
+select * from v$asm_operation;
+GROUP_NUMBER OPERA STATE                     POWER     ACTUAL      SOFAR   EST_WORK   EST_RATE EST_MINUTES ERROR_CODE
+------------ ----- -------------------- ---------- ---------- ---------- ---------- ---------- ----------- --------------------------------------------
+           1 REBAL RUN                           1          1      46993     187411       7856          17
+```
+
 
 
 #### 大表创建索引
@@ -4206,8 +4680,6 @@ $ tail -30 ggserr.log
 $ cd /oracle/ogg/dirrpt
 $ more rep_spc.dsc
 ```
-
-
 
 
 
