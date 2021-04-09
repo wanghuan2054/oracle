@@ -317,27 +317,29 @@ if [ -d $ORACLE_LNSDIRS ]; then
    # alert目录下执行 ， 删除log.xml 备份文件
   find $ORACLE_LNSDIRS/alert/ -mtime +$WEEK_DAYS -name "*.xml" | xargs rm -rf 
   
-  # listener 目录
-  log_list=`ls $ORACLE_LNSDIRS/trace/listener*.log`
+  # listener 目录 , 先判断是否存在listerner log 文件 , rac集群下listener log记录在grid下
+  if [ -d $ORACLE_LNSDIRS/trace/listener*.log ]; then 
+     log_list=`ls $ORACLE_LNSDIRS/trace/listener*.log`
+     for log_name in $log_list
+      do
+       export SIZE=`du -sk $log_name | cut -f1`
+       
+       # listener 大于 100M
+       if [ ${SIZE} -ge 100*1024 ]; then
+           # 写日志关闭
+           lsnrctl set log_status off
+           
+           # 先备份listener log
+           cp $log_name $log_name.$TODAY
+           # 再清空listener log
+           cat /dev/null > $log_name
+           
+           # 写日志打开
+           lsnrctl set log_status on
+       fi
   
-  for log_name in $log_list
-    do
-     export SIZE=`du -sk $log_name | cut -f1`
-     
-     # listener 大于 100M
-     if [ ${SIZE} -ge 100*1024 ]; then
-         # 写日志关闭
-         lsnrctl set log_status off
-         
-         # 先备份listener log
-         cp $log_name $log_name.$TODAY
-         # 再清空listener log
-         cat /dev/null > $log_name
-         
-         # 写日志打开
-         lsnrctl set log_status on
-     fi
-  done
+     done
+  fi 
   
   # 清理备份的listener log
   find $ORACLE_LNSDIRS/trace/ -mtime +$WEEK_DAYS -name "*.log*" | xargs rm -rf
@@ -347,6 +349,8 @@ if [ -d $ORACLE_LNSDIRS ]; then
 fi 
 
 #################tnslsnr listener trace alert log
+
+
 
 # rac grid 用户下操作
 #################tnslsnr listener trace alert log
@@ -387,6 +391,7 @@ if [ -d $GRID_LNSDIRS ]; then
   find $GRID_LNSDIRS/trace/ -mtime +$WEEK_DAYS -name "*.trc" | xargs rm -rf  
   find $GRID_LNSDIRS/trace/ -mtime +$WEEK_DAYS -name "*.trm" | xargs rm -rf
 fi 
+
 #################tnslsnr listener trace alert log
 ```
 
