@@ -1099,9 +1099,74 @@ Sort Merge Join：将两个表的数据分别全部读取出来并排序，然�
 Cartesian Join：两个表没有where条件，应用中应当避免笛卡尔积。
 ```
 
+###   **索引创建原则**  
+
+适合创建索引的列
+
+1. 索引覆盖、避免排序
+2. 复合索引尽量兼顾更多SQL
+3. 该列在表中的唯一性特别高或者有些状态列有倾斜值
+4. 等值谓词条件字段放在前面，非等值谓词条件字段放在后面
+5. 表关联使用Nested Loop 被驱动表的关联字段上建议创建索引
+6. 该SQL语句是主流的业务，具有高并发，where条件中出现的列
+
+不适合创建索引的列
+
+1. DML频繁的表不适合创建索引，索引会带来额外的维护成本
+2. Where条件中不会使用的列也不适合创建索引
+
+### 索引覆盖避免回表
+
+![1618820148796](C:\Users\10024908\Desktop\oracle\images\1618820148796.png)
+
+### 避免排序
+
+![1618820258962](C:\Users\10024908\Desktop\oracle\images\1618820258962.png)
+
+### 等值在前
+
+![1618820291538](C:\Users\10024908\Desktop\oracle\images\1618820291538.png)
 
 
-### **表**
+
+###    **哪些情况走不上索引**  
+
+1. 统计信息不准
+
+   ![1618889698584](C:\Users\10024908\Desktop\oracle\images\1618889698584.png)
+
+   ```sql
+   -- 查看表中字段的倾斜程度， 表直方图信息收集
+   SELECT T.COLUMN_NAME, T.NUM_DISTINCT, T.NUM_NULLS , T.*
+     FROM DBA_TAB_COL_STATISTICS T
+    WHERE T.OWNER = USER
+      AND T.TABLE_NAME = 'LOTHISTORY'
+      AND T.COLUMN_NAME = 'LOTNAME';
+      
+   Note: 统计信息不准会影响执行计划的改变
+   ```
+
+2. 倾斜值
+
+3. 聚簇因子
+
+4. 隐式转换
+
+5. 条件列上存在运算符
+
+6. 索引状态
+
+7. 表很小
+
+8. null值 要么where条件限制is not null 要么字段属性设为not null
+
+
+
+
+
+
+
+## **表**
 
 #### 获取表定义
 
@@ -2471,7 +2536,7 @@ SELECT TRUNC(COMPLETION_TIME), SUM(MB) / 1024 DAY_GB
  ORDER BY 1 DESC;
 
 --列出全部归档文件
- list archivelog all;    
+list archivelog all;    
 ```
 
 #### 查看归档磁盘路径
@@ -2720,7 +2785,7 @@ $ ls alert*log*
 -rw-r-----   1 oracle     asmadmin   1490263 Jan 25 15:21 alert_mdwdb1.log.20210124
 -rw-r--r--   1 oracle     asmadmin      6468 May 21  2014 sbtio.log
 
-
+#  cd /oracle/app/diag/rdbms/*/*/trace/
 # 先备份alert log , 需要进入到alert对应目录下
 $ cp alert_${ORACLE_SID}.log ./alert_${ORACLE_SID}_`date +%Y%m%d%H%M%S`.log
 
@@ -3186,6 +3251,19 @@ SELECT *
    FOR UPDATE NOWAIT;
 
 -- SYS 用户查询，（有时候需要登录到对应的节点执行）
+set echo off feedback off timing off pause off
+set pages 100 lines 232 trimspool on trimout on space 1 recsep off
+col OWNER format a12
+col OBJECT_NAME format a12
+col OBJECT_TYPE format a12
+col SID format a9
+col SERIAL# format a16
+col LOCKWAIT  format a18
+col STATUS format a15
+col OSUSER format a15
+col MACHINE  format a18
+col PROCESS format a15
+col PROGRAM format a15
 SELECT C . OWNER,
        C . OBJECT_NAME,
        C . OBJECT_TYPE,
