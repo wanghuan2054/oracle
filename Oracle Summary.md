@@ -1148,23 +1148,355 @@ Cartesian Join：两个表没有where条件，应用中应当避免笛卡尔积�
 
 2. 倾斜值
 
+   ![1618902056439](C:\Users\10024908\Desktop\oracle\images\1618902056439.png)
+
+   
+
 3. 聚簇因子
+
+   ![1618902151870](C:\Users\10024908\Desktop\oracle\images\1618902151870.png)
+
+   ![1618902258285](C:\Users\10024908\Desktop\oracle\images\1618902258285.png)
+
+   
 
 4. 隐式转换
 
+   ![1618902384406](C:\Users\10024908\Desktop\oracle\images\1618902384406.png)
+
 5. 条件列上存在运算符
 
+   ![1618902433389](C:\Users\10024908\Desktop\oracle\images\1618902433389.png)
+
+   ![1618902408885](C:\Users\10024908\Desktop\oracle\images\1618902408885.png)
+
 6. 索引状态
+
+   ![1618902514181](C:\Users\10024908\Desktop\oracle\images\1618902514181.png)
 
 7. 表很小
 
 8. null值 要么where条件限制is not null 要么字段属性设为not null
 
+   ![1618902638217](C:\Users\10024908\Desktop\oracle\images\1618902638217.png)
 
 
 
+![1618902656373](C:\Users\10024908\Desktop\oracle\images\1618902656373.png)
 
 
+
+![1618902676008](C:\Users\10024908\Desktop\oracle\images\1618902676008.png)
+
+
+
+![1618902701626](C:\Users\10024908\Desktop\oracle\images\1618902701626.png)
+
+###      **NULL**  
+
+1. 只能用IS NULL、IS NOT NULL去判断
+
+   ```sql
+   select * from test where id is null;
+   select * from test where id is not null;
+   ```
+
+2. NULL对IN、NOT IN查询的影响
+
+   ![1618903150443](C:\Users\10024908\Desktop\oracle\images\1618903150443.png)
+
+3. NULL的默认类型是字符类型
+
+   ![1618903173430](C:\Users\10024908\Desktop\oracle\images\1618903173430.png)
+
+4. NULL与空字符串‘ ’的关系
+
+   ![1618903228345](C:\Users\10024908\Desktop\oracle\images\1618903228345.png)
+
+5. NULL和索引
+
+![1618903252565](C:\Users\10024908\Desktop\oracle\images\1618903252565.png)
+
+### 绑定变量
+
+![1618903506930](C:\Users\10024908\Desktop\oracle\images\1618903506930.png)
+
+```sql
+绑定变量分级
+   
+第一个等级：定义长度在32字节以内的文本型绑定变量
+第二个等级：定义长度在33-128字节之间的文本型绑定变量
+第三个等级：定义长度在129-2000字节之间的文本型绑定变量
+第四个等级：定义长度在2000字节以上的文本型绑定变量
+
+Oracle为数值型的绑定变量分配22个字节的内存空间
+
+如何查询已执行的目标SQL中绑定变量的值
+
+V$SQL_BIND_CAPTUTE;
+DBA_HIST_SQLBIND;
+
+
+ _CURSOR_BIND_CAPTURE_INTERVAL
+```
+
+![1618903572304](C:\Users\10024908\Desktop\oracle\images\1618903572304.png)
+
+
+
+```sql
+
+如果是绑定变量，选择率: 1/numdistinct
+
+如果是是字面值，选择率:
+   有直方图：该字段某个具体值的1/数据记录
+   没有直方图：1/numdistinct
+
+绑定变量使用建议
+绑定变量窥视关闭、收集直方图环境下
+
+建议使用绑定变量的列对于流水号、订单号、用户ID、电话号码、身份证号码、证件号码等，这类列的唯一性非常好、列的不同值和表的数据量比值接近，这类列涉及的SQL语句往往存在并发，写成绑定变量大大减少数据库的解析成本。
+
+不建议使用绑定变量的列能够枚举的列（比如状态类型字段，这部分类型字段往往不同值较少，即使不写成绑定变量也只会产生极少数的SQL_ID，解析成本占SQL总的成本很低。能够枚举类型的列还可能存在倾斜数据，如果使用绑定变量，则对于倾斜数据的评估并不准确，可能导致该列无法走索引范围扫描、或者影响表JOIN阶段驱动表的选择等。
+
+建议使用绑定变量的列
+SELECT * FROM TEST WHERE ACCOUNT_ID=123456;
+
+SELECT * FROM TEST WHERE CUSTOMER_ID=123456;
+
+CUSTOMER_ID和ACCOUNT_ID字段都是表中唯一性比较高的字段，同业务类型的SQL有成千上万甚至更多，都只是因为具体值不同而产生不同的SQL_ID，建议使用绑定变量。
+
+```
+
+### 并行
+
+```sql
+并行执行指能够将一个大型串行任务物理的划分为多个较小的部分，这些较小的部分可以同时得到处理，是一种资源（IO、CPU、内存资源等）换取时间的优化方法。
+大表需要全表扫描时，可以大幅提高响应时间。
+
+适用并行执行的任务
+必须有一个非常大的任务，例如大表的某些字段不适合创建索引需要对大表全表扫描。
+必须有足够的可用资源（CPU、I/O、内存）。在并行大表全表扫描数据之前，确保有足够的空闲CPU，还要有足够的I/O通道。
+
+使用注意点
+快速收集大表统计信息、创建大表索引、CTAS时使用
+并行创建索引或创建表后，建议将并行度改回1，如:
+    Create index idx_name on table_name(column_name) parallel 4;
+    Alter index idx_name noparallel;
+
+并行语句的写法
+表级别并行：/*+ parallel(t,2) */这种写法是对于t表开启并行执行部分。
+
+语句级别并行/*+ parallel(2) */会开启语句级别并行，即该SQL语句所有表查询、表关联等开启并行，在oracle 11g后推荐使用语句级别并行方式。
+
+SQL语句请一定写明并行度parallel(n)，如果不写并行度则会使用Oracle默认的并行度则可能导致资源消耗殆尽。/*+ parallel 4*/ 、/*+ parallel */都是危险的写法，会启用默认并行度
+
+DML并行
+
+
+alter session enable parallel dm
+    注意:很多时候因为没有执行enable parallel dml，导致dml语句并没有并行,    执行计划显示的并行是query部分的并行
+
+会产生表锁，直到commit;
+    提交后alter session disable parallel dml ;
+```
+
+#### 并行执行SQL语句
+
+![1618903724531](C:\Users\10024908\Desktop\oracle\images\1618903724531.png)
+
+
+
+### Oracle的查询转换
+
+```sql
+Oracle中的查询转换又称为查询改写，意思是在对目标SQL进行解析的时候
+可能会对其做等价改写。
+①　用户提交SQL
+②　语法语义权限检查
+③　有匹配的子游标直接使用
+④　没有匹配子游标-进入查询转换阶进行SQL改写-查询优化阶段选择最优执行计划
+⑤　用户实际执行
+
+```
+
+![1618903859169](C:\Users\10024908\Desktop\oracle\images\1618903859169.png)
+
+![1618903876425](C:\Users\10024908\Desktop\oracle\images\1618903876425.png)
+
+![1618903898371](C:\Users\10024908\Desktop\oracle\images\1618903898371.png)
+
+```sql
+视图合并
+
+ 类似于子查询展开
+
+ 优化器会将目标SQL中的视图定义中的基表拿出来和外部查询做关联，这样可以走上更多
+ 可能的执行计划，相关hint/*+ merge(view) */
+
+```
+
+![1618903945546](C:\Users\10024908\Desktop\oracle\images\1618903945546.png)
+
+![1618903961707](C:\Users\10024908\Desktop\oracle\images\1618903961707.png)
+
+
+
+```sql
+外连接视图合并
+
+指那些使用了外连接、以及视图定义语句中不含distinct等聚合函数的目标SQL的视图合并，使用了外连接指的是：
+①外部表和视图之间使用了外连接
+②视图内部定义中使用了外连接
+```
+
+![1618904001418](C:\Users\10024908\Desktop\oracle\images\1618904001418.png)
+
+![1618904018334](C:\Users\10024908\Desktop\oracle\images\1618904018334.png)
+
+![1618904044739](C:\Users\10024908\Desktop\oracle\images\1618904044739.png)
+
+![1618904071650](C:\Users\10024908\Desktop\oracle\images\1618904071650.png)
+
+```sql
+复杂视图合并
+
+复杂视图合并是指视图定义中包含ditinct，group by的目标SQL的视图合并，也是把内部基表拿出来和外表做关联，这就意味着是先做表关联然后再做distinct或者group by。
+如果distinct能够有效的过滤数据，那么不执行视图合并，直接先执行视图内部反而更好，也就是复杂视图合并将ditinct放在最后执行并不一定是最好的，优化器这里会考虑成本。
+```
+
+![1618904103329](C:\Users\10024908\Desktop\oracle\images\1618904103329.png)
+
+![1618904121248](C:\Users\10024908\Desktop\oracle\images\1618904121248.png)
+
+#### 如果视图无法合并，怎么优化呢？
+
+```sql
+连接谓词推入
+
+连接谓词推入是优化器处理带视图的目标SQL的另一种优化手段，优化器会将SQL语句中的视图部分作为一个独立的单元处理。此时优化器会将视图和外部查询的关联条件推入视图内部，目的是为了让视图定义的基表可以走上索引，然后走NL关联
+
+但是优化器会考虑成本，相关hint/*+ push_pred(view) */
+
+连接谓词推入条件
+
+11g中满足【视图中包含distinct/group by/union all】或者【视图和外部查询之间是外连接/反连接/半连接】两个条件之一就可以谓词推入
+
+```
+
+![1618904186457](C:\Users\10024908\Desktop\oracle\images\1618904186457.png)
+
+![1618904201815](C:\Users\10024908\Desktop\oracle\images\1618904201815.png)
+
+![1618904218119](C:\Users\10024908\Desktop\oracle\images\1618904218119.png)
+
+![1618904232677](C:\Users\10024908\Desktop\oracle\images\1618904232677.png)
+
+![1618904265308](C:\Users\10024908\Desktop\oracle\images\1618904265308.png)
+
+### 其他类
+
+```sql
+业务调整方面
+取消不必要的业务调用无论一个sql如何被优化，总是需要消耗性能的，所以对于不是系统必须的业务，请不要调用它
+
+降低业务调用次数对于资源消耗较大的sql对应的业务模块，从业务层面看能否降低调用次数，随着业务调用次数的减少SQL的执行频率会降低，对数据库的性能冲击也会缓解
+
+修改报表等大量消耗系统资源的业务调用时间根据现有的系统特点，将消耗大量资源的业务（比如报表业务）调整到系统闲暇时段执行(比如大部分系统系统最繁忙的时段是早上9点到11点，下午2点到下午5点)，也可以采用ORACLE提供的ADG等读写分离的方式来处理部分报表等读业务的SQL
+
+
+
+SQL调整方面
+业务逻辑判断要和sql语句的写法相符合比如判断某个列是否为null，在oracle中正确的sql写法中只能是is not null    或者 is null这两种判断，不能写成where column_name=null或者where column_name<>null
+
+SQL语句中尽量避免在列上面做表达式或者函数运算，即使这个列没有索引，也会增加cpu的运算成本：例如：select * from test where to_char(id)=:1,把表达式和函数加载到数据库常量那边
+
+减少标量子查询的SQL语句，尽量写成表的外连接
+
+尽量减少不必要的表关联、select查询中不需要的列不要写到查询
+
+```
+
+### 分页的写法
+
+![1618904337729](C:\Users\10024908\Desktop\oracle\images\1618904337729.png)
+
+![1618904450890](C:\Users\10024908\Desktop\oracle\images\1618904450890.png)
+
+![1618904468334](C:\Users\10024908\Desktop\oracle\images\1618904468334.png)
+
+
+
+![1618904496602](C:\Users\10024908\Desktop\oracle\images\1618904496602.png)
+
+![1618904522307](C:\Users\10024908\Desktop\oracle\images\1618904522307.png)
+
+![1618904544331](C:\Users\10024908\Desktop\oracle\images\1618904544331.png)
+
+![1618904562892](C:\Users\10024908\Desktop\oracle\images\1618904562892.png)
+
+![1618904582319](C:\Users\10024908\Desktop\oracle\images\1618904582319.png)
+
+
+
+![1618904647241](C:\Users\10024908\Desktop\oracle\images\1618904647241.png)
+
+![1618904668749](C:\Users\10024908\Desktop\oracle\images\1618904668749.png)
+
+![1618904685431](C:\Users\10024908\Desktop\oracle\images\1618904685431.png)
+
+![1618904703833](C:\Users\10024908\Desktop\oracle\images\1618904703833.png)
+
+![1618904721652](C:\Users\10024908\Desktop\oracle\images\1618904721652.png)
+
+![1618904746511](C:\Users\10024908\Desktop\oracle\images\1618904746511.png)
+
+![1618904762439](C:\Users\10024908\Desktop\oracle\images\1618904762439.png)
+
+![1618904778934](C:\Users\10024908\Desktop\oracle\images\1618904778934.png)
+
+![1618904795986](C:\Users\10024908\Desktop\oracle\images\1618904795986.png)
+
+![1618904815938](C:\Users\10024908\Desktop\oracle\images\1618904815938.png)
+
+![1618904832464](C:\Users\10024908\Desktop\oracle\images\1618904832464.png)
+
+![1618904848733](C:\Users\10024908\Desktop\oracle\images\1618904848733.png)
+
+![1618904906923](C:\Users\10024908\Desktop\oracle\images\1618904906923.png)
+
+![1618904923345](C:\Users\10024908\Desktop\oracle\images\1618904923345.png)
+
+![1618904950326](C:\Users\10024908\Desktop\oracle\images\1618904950326.png)
+
+![1618904986152](C:\Users\10024908\Desktop\oracle\images\1618904986152.png)
+
+![1618905004741](C:\Users\10024908\Desktop\oracle\images\1618905004741.png)
+
+![1618905025228](C:\Users\10024908\Desktop\oracle\images\1618905025228.png)
+
+![1618905053022](C:\Users\10024908\Desktop\oracle\images\1618905053022.png)
+
+![1618905068921](C:\Users\10024908\Desktop\oracle\images\1618905068921.png)
+
+![1618905088008](C:\Users\10024908\Desktop\oracle\images\1618905088008.png)
+
+![1618905108634](C:\Users\10024908\Desktop\oracle\images\1618905108634.png)
+
+![1618905122801](C:\Users\10024908\Desktop\oracle\images\1618905122801.png)
+
+### 总结
+
+```sql
+优化是一个长期的持续的过程
+
+1. 分析TOP SQL
+
+2. 分析AWR报告
+
+3. 定期对数据库进行巡检
+
+```
 
 ## **表**
 
