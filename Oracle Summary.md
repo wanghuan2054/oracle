@@ -282,6 +282,44 @@ SELECT * FROM DBA_SYS_PRIVS;
 SELECT * FROM USER_SYS_PRIVS;
 ```
 
+### 创建用户及赋权查看所有表和视图
+
+```sql
+-- 创建用户
+CREATE USER FINEBIADM IDENTIFIED BY FINEBIADM;  
+
+-- GRANT(授权)命令 给用户
+GRANT CONNECT, RESOURCE TO FINEBIADM; 
+
+-- 查看ROLE授权是否成功
+SELECT T.* FROM DBA_ROLE_PRIVS T
+WHERE T.GRANTEE = 'FINEBIADM' ;
+
+
+-- 给用户授予查看所有表的权限
+GRANT  CREATE SESSION, SELECT ANY TABLE TO FINEBIADM;
+-- 给用户授予SELECT ANY DICTIONARY 权限，那么用户就能访问所有的视图
+GRANT SELECT ANY DICTIONARY TO FINEBIADM;
+
+SELECT T.* FROM DBA_SYS_PRIVS T
+WHERE T.GRANTEE = 'FINEBIADM' ;
+
+
+-- 出现错误：ORA-00942：表或视图不存在
+解决方法1：需指定schema，修改语句如下
+select * from tech_scm.sm_sales_order;
+
+解决方法2 : 如不想每次输入schema，设置默认schema就可以了
+alter session set current_schema = tech_scm;
+
+-- 解决方法3（推荐）,在登录之后创建触发器， alter session 设置schema为EDBADM
+CREATE OR REPLACE TRIGGER SET_DEFAULT_SCHEMA
+AFTER LOGON ON SCHEMA
+BEGIN
+EXECUTE IMMEDIATE 'alter session set current_schema=EDBADM';
+END ;
+```
+
 ### 查看生成AWR进程
 
 ```shell
