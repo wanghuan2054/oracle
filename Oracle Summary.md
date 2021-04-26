@@ -4515,6 +4515,12 @@ SPCCONTROLDATACUMULATIVERESULT
 SPCCONTROLDATARULEOUT
 DATACOLLECTRESULT
 DATACOLLECT
+*/
+
+
+
+
+
 ```
 
 确认同步表的所属用户均为： P1MESADM
@@ -4965,7 +4971,9 @@ lagcriticalminutes 45
 -- 目标端配置复制进程
 ./ggsci
 dblogin USERID goldengate,PASSWORD goldengate
+
 add checkpointtable goldengate.checkpoint
+
 add replicat REP_SPC,exttrail ./dirdat/sp,checkpointtable goldengate.checkpoint
 
 -- 配置REP_SPC 文件
@@ -4993,18 +5001,6 @@ map p1mesadm.SPCCONTROLDATARULEOUT,target edbadm.SPCCONTROLDATARULEOUT;
 map p1mesadm.DATACOLLECTRESULT,target edbadm.DATACOLLECTRESULT;
 map p1mesadm.DATACOLLECT,target edbadm.DATACOLLECT;
 
-```
-
-##### dmp 文件由源端传送到目的端
-
-```sql
--- scp 拷贝，或者使用共享存储挂载实现dmp文件传输
-$ scp expdp_mesdb2_spc_*.dmp oracle@XX.XX.XX.XX:/dump_tst
-Password: 
-expdp_mesdb2_spc_01.dmp                                                                                                        100%  155MB  51.7MB/s  52.9MB/s   00:03    
-expdp_mesdb2_spc_02.dmp                                                                                                        100%   28KB  28.0KB/s  52.9MB/s   00:00  
-
--- 需要确认目标端/oracle/expdp是否有足够的空间
 ```
 
 ##### 导入目标端数据
@@ -5044,6 +5040,20 @@ grant read,write on directory DUMP_WANG to dpuser;
 --查看目录及权限
 SELECT privilege, directory_name, DIRECTORY_PATH FROM user_tab_privs t, all_directories d
  WHERE t.table_name(+) = d.directory_name ORDER BY 2, 1;
+```
+
+##### 
+
+##### dmp 文件由源端传送到目的端
+
+```sql
+-- scp 拷贝，或者使用共享存储挂载实现dmp文件传输
+$ scp expdp_mesdb2_spc_*.dmp oracle@XX.XX.XX.XX:/dump_tst
+Password: 
+expdp_mesdb2_spc_01.dmp                                                                                                        100%  155MB  51.7MB/s  52.9MB/s   00:03    
+expdp_mesdb2_spc_02.dmp                                                                                                        100%   28KB  28.0KB/s  52.9MB/s   00:00  
+
+-- 需要确认目标端/oracle/expdp是否有足够的空间
 ```
 
 ##### impdp
